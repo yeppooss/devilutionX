@@ -2,7 +2,6 @@
 
 #include <SDL.h>
 
-#include "miniwin/miniwin.h"
 #include "engine/assets.hpp"
 
 #ifdef __cplusplus

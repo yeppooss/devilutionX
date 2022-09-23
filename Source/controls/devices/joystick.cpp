@@ -8,9 +8,6 @@
 
 namespace devilution {
 
-// Defined in SourceX/controls/plctrls.cpp
-extern bool sgbControllerActive;
-
 std::vector<Joystick> Joystick::joysticks_;
 
 ControllerButton Joystick::ToControllerButton(const SDL_Event &event)
@@ -114,8 +111,6 @@ ControllerButton Joystick::ToControllerButton(const SDL_Event &event)
 
 int Joystick::ToSdlJoyButton(ControllerButton button)
 {
-	if (button == ControllerButton_AXIS_TRIGGERLEFT || button == ControllerButton_AXIS_TRIGGERRIGHT)
-		UNIMPLEMENTED();
 	switch (button) {
 #ifdef JOY_BUTTON_A
 	case ControllerButton_BUTTON_A:
@@ -156,6 +151,14 @@ int Joystick::ToSdlJoyButton(ControllerButton button)
 #ifdef JOY_BUTTON_RIGHTSHOULDER
 	case ControllerButton_BUTTON_RIGHTSHOULDER:
 		return JOY_BUTTON_RIGHTSHOULDER;
+#endif
+#ifdef JOY_BUTTON_TRIGGERLEFT
+	case ControllerButton_AXIS_TRIGGERLEFT:
+		return JOY_BUTTON_TRIGGERLEFT;
+#endif
+#ifdef JOY_BUTTON_TRIGGERRIGHT
+	case ControllerButton_AXIS_TRIGGERRIGHT:
+		return JOY_BUTTON_TRIGGERRIGHT;
 #endif
 #ifdef JOY_BUTTON_DPAD_UP
 	case ControllerButton_BUTTON_DPAD_UP:
@@ -267,7 +270,6 @@ void Joystick::Add(int deviceIndex)
 	result.instance_id_ = SDL_JoystickInstanceID(result.sdl_joystick_);
 #endif
 	joysticks_.push_back(result);
-	sgbControllerActive = true;
 }
 
 void Joystick::Remove(SDL_JoystickID instanceId)
@@ -279,7 +281,6 @@ void Joystick::Remove(SDL_JoystickID instanceId)
 		if (joystick.instance_id_ != instanceId)
 			continue;
 		joysticks_.erase(joysticks_.begin() + i);
-		sgbControllerActive = !joysticks_.empty();
 		return;
 	}
 	Log("Joystick not found with instance id: {}", instanceId);

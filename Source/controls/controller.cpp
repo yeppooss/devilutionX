@@ -2,11 +2,23 @@
 
 #include <cmath>
 
+#ifndef USE_SDL1
 #include "controls/devices/game_controller.h"
+#endif
 #include "controls/devices/joystick.h"
 #include "controls/devices/kbcontroller.h"
 
 namespace devilution {
+
+void UnlockControllerState(const SDL_Event &event)
+{
+#ifndef USE_SDL1
+	GameController *const controller = GameController::Get(event);
+	if (controller != nullptr) {
+		controller->UnlockTriggerState();
+	}
+#endif
+}
 
 ControllerButtonEvent ToControllerButtonEvent(const SDL_Event &event)
 {
@@ -31,14 +43,19 @@ ControllerButtonEvent ToControllerButtonEvent(const SDL_Event &event)
 	GameController *const controller = GameController::Get(event);
 	if (controller != nullptr) {
 		result.button = controller->ToControllerButton(event);
-		if (result.button != ControllerButton_NONE)
+		if (result.button != ControllerButton_NONE) {
+			if (result.button == ControllerButton_AXIS_TRIGGERLEFT || result.button == ControllerButton_AXIS_TRIGGERRIGHT) {
+				result.up = !controller->IsPressed(result.button);
+			}
 			return result;
+		}
 	}
 #endif
 
 	const Joystick *joystick = Joystick::Get(event);
-	if (joystick != nullptr)
+	if (joystick != nullptr) {
 		result.button = devilution::Joystick::ToControllerButton(event);
+	}
 
 	return result;
 }

@@ -5,9 +5,11 @@
  */
 #pragma once
 
+#include "DiabloUI/ui_flags.hpp"
 #include "control.h"
 #include "engine.h"
-#include "engine/cel_sprite.hpp"
+#include "engine/clx_sprite.hpp"
+#include "utils/attributes.h"
 #include "utils/stdcompat/optional.hpp"
 
 namespace devilution {
@@ -44,46 +46,15 @@ enum talk_id : uint8_t {
 	STORE_BARMAID,
 };
 
-struct STextStruct {
-	int _sx;
-	int _syoff;
-	char _sstr[128];
-	UiFlags flags;
-	int _sline;
-	bool _ssel;
-	int _sval;
-
-	int y;
-
-	[[nodiscard]] bool IsDivider() const
-	{
-		return _sline != 0;
-	}
-	[[nodiscard]] bool IsText() const
-	{
-		return _sstr[0] != '\0';
-	}
-};
-
-/** Shop frame graphics */
-extern std::optional<CelSprite> pSTextBoxCels;
-/** Small text selection cursor */
-extern std::optional<CelSprite> pSPentSpn2Cels;
-/** Scrollbar graphics */
-extern std::optional<CelSprite> pSTextSlidCels;
-
 /** Currently active store */
 extern talk_id stextflag;
 
 /** Current index into storehidx/storehold */
-extern int storenumh;
+extern DVL_API_FOR_TEST int storenumh;
 /** Map of inventory items being presented in the store */
 extern char storehidx[48];
 /** Copies of the players items as presented in the store */
-extern Item storehold[48];
-
-/** Temporary item used to generate gold piles by various function */
-extern Item golditem;
+extern DVL_API_FOR_TEST Item storehold[48];
 
 /** Items sold by Griswold */
 extern Item smithitem[SMITH_ITEMS];
@@ -106,10 +77,16 @@ extern int boylevel;
 extern Item boyitem;
 
 void AddStoreHoldRepair(Item *itm, int8_t i);
+
+/** Clears premium items sold by Griswold and Wirt. */
 void InitStores();
+
+/** Spawns items sold by vendors, including premium items sold by Griswold and Wirt. */
 void SetupTownStores();
+
 void FreeStoreMem();
-void PrintSString(const Surface &out, int margin, int line, const char *text, UiFlags flags, int price = 0);
+
+void PrintSString(const Surface &out, int margin, int line, string_view text, UiFlags flags, int price = 0);
 void DrawSLine(const Surface &out, int sy);
 void DrawSTextHelp();
 void ClearSText(int s, int e);

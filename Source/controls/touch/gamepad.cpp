@@ -2,7 +2,6 @@
 
 #include "control.h"
 #include "controls/touch/gamepad.h"
-#include "diablo.h"
 #include "quests.h"
 #include "utils/display.h"
 #include "utils/ui_fwd.h"
@@ -62,7 +61,11 @@ void InitializeVirtualGamepad()
 	if (SDL_GetDisplayDPI(displayIndex, nullptr, &hdpi, &vdpi) == 0) {
 		int clientWidth;
 		int clientHeight;
-		SDL_GetWindowSize(ghMainWnd, &clientWidth, &clientHeight);
+		if (renderer != nullptr)
+			SDL_GetRendererOutputSize(renderer, &clientWidth, &clientHeight);
+		else
+			SDL_GetWindowSize(ghMainWnd, &clientWidth, &clientHeight);
+
 		hdpi *= static_cast<float>(gnScreenWidth) / clientWidth;
 		vdpi *= static_cast<float>(gnScreenHeight) / clientHeight;
 
@@ -166,8 +169,6 @@ void InitializeVirtualGamepad()
 	manaButtonArea.position.y = directionPad.area.position.y - (directionPadSize + padButtonSize + padButtonSpacing) / 2;
 	manaButtonArea.radius = padButtonSize / 2;
 	manaButton.isUsable = []() { return !chrflag && !QuestLogIsOpen; };
-
-	VirtualGamepadState.isActive = false;
 }
 
 void ActivateVirtualGamepad()
@@ -218,7 +219,7 @@ void VirtualDirectionPad::UpdatePosition(Point touchCoordinates)
 		return;
 	}
 
-	if (!area.Contains(position)) {
+	if (!area.contains(position)) {
 		int x = diff.deltaX;
 		int y = diff.deltaY;
 		double dist = sqrt(x * x + y * y);

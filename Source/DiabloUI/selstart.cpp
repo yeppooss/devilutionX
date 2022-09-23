@@ -1,9 +1,11 @@
 #include "selstart.h"
 
-#include "control.h"
 #include "DiabloUI/diabloui.h"
+#include "control.h"
+#include "engine/load_clx.hpp"
 #include "options.h"
 #include "utils/language.h"
+#include "utils/sdl_geometry.h"
 
 namespace devilution {
 namespace {
@@ -13,13 +15,11 @@ bool endMenu;
 std::vector<std::unique_ptr<UiListItem>> vecDialogItems;
 std::vector<std::unique_ptr<UiItemBase>> vecDialog;
 
-Art artLogo;
-
 void ItemSelected(int value)
 {
-	auto option = static_cast<StartUpGameOption>(vecDialogItems[value]->m_value);
-	sgOptions.Hellfire.startUpGameOption = option;
-	gbIsHellfire = option == StartUpGameOption::Hellfire;
+	auto option = static_cast<StartUpGameMode>(vecDialogItems[value]->m_value);
+	sgOptions.StartUp.gameMode.SetValue(option);
+	SaveOptions();
 	endMenu = true;
 }
 
@@ -32,19 +32,17 @@ void EscPressed()
 
 void UiSelStartUpGameOption()
 {
-	LoadArt("ui_art\\mainmenuw.pcx", &ArtBackgroundWidescreen);
+	ArtBackgroundWidescreen = LoadOptionalClx("ui_art\\mainmenuw.clx");
 	LoadBackgroundArt("ui_art\\mainmenu.pcx");
-	LoadMaskedArt("ui_art\\hf_logo2.pcx", &artLogo, 16);
 	UiAddBackground(&vecDialog);
+	UiAddLogo(&vecDialog);
 
-	SDL_Rect rect = { 0, (Sint16)(UI_OFFSET_Y), 0, 0 };
-	vecDialog.push_back(std::make_unique<UiImage>(&artLogo, rect, UiFlags::AlignCenter, /*bAnimated=*/true));
+	const Point uiPosition = GetUIRectangle().position;
+	vecDialogItems.push_back(std::make_unique<UiListItem>(_("Enter Hellfire"), static_cast<int>(StartUpGameMode::Hellfire)));
+	vecDialogItems.push_back(std::make_unique<UiListItem>(_("Switch to Diablo"), static_cast<int>(StartUpGameMode::Diablo)));
+	vecDialog.push_back(std::make_unique<UiList>(vecDialogItems, vecDialogItems.size(), uiPosition.x + 64, uiPosition.y + 240, 510, 43, UiFlags::AlignCenter | UiFlags::FontSize42 | UiFlags::ColorUiGold, 5));
 
-	vecDialogItems.push_back(std::make_unique<UiListItem>(_("Enter Hellfire"), static_cast<int>(StartUpGameOption::Hellfire)));
-	vecDialogItems.push_back(std::make_unique<UiListItem>(_("Switch to Diablo"), static_cast<int>(StartUpGameOption::Diablo)));
-	vecDialog.push_back(std::make_unique<UiList>(vecDialogItems, PANEL_LEFT + 64, (UI_OFFSET_Y + 240), 510, 43, UiFlags::AlignCenter | UiFlags::FontSize42 | UiFlags::ColorUiGold, 5));
-
-	UiInitList(vecDialogItems.size(), nullptr, ItemSelected, EscPressed, vecDialog, true);
+	UiInitList(nullptr, ItemSelected, EscPressed, vecDialog, true);
 
 	endMenu = false;
 	while (!endMenu) {
@@ -53,9 +51,8 @@ void UiSelStartUpGameOption()
 		UiPollAndRender();
 	}
 
-	artLogo.Unload();
-	ArtBackground.Unload();
-	ArtBackgroundWidescreen.Unload();
+	ArtBackground = std::nullopt;
+	ArtBackgroundWidescreen = std::nullopt;
 	vecDialogItems.clear();
 	vecDialog.clear();
 }

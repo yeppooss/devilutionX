@@ -3,14 +3,20 @@
 #include <cmath>
 
 #include "controls/controller.h"
+#ifndef USE_SDL1
 #include "controls/devices/game_controller.h"
+#endif
 #include "controls/devices/joystick.h"
 #include "controls/devices/kbcontroller.h"
 #include "controls/game_controls.h"
+#include "controls/plrctrls.h"
 #include "controls/touch/gamepad.h"
 #include "options.h"
+#include "utils/log.hpp"
 
 namespace devilution {
+
+bool SimulatingMouseWithSelectAndDPad;
 
 namespace {
 
@@ -60,38 +66,78 @@ void ScaleJoystickAxes(float *x, float *y, float deadzone)
 	}
 }
 
+void SetSimulatingMouseWithDpad(bool value)
+{
+	if (SimulatingMouseWithSelectAndDPad == value)
+		return;
+	SimulatingMouseWithSelectAndDPad = value;
+	if (value) {
+		LogVerbose("Control: begin simulating mouse with D-Pad");
+	} else {
+		LogVerbose("Control: end simulating mouse with D-Pad");
+	}
+}
+
 // SELECT + D-Pad to simulate right stick movement.
 bool SimulateRightStickWithDpad(ControllerButtonEvent ctrlEvent)
 {
 	if (sgOptions.Controller.bDpadHotkeys)
 		return false;
-	static bool simulating = false;
+	if (ctrlEvent.button == ControllerButton_NONE || ctrlEvent.button == ControllerButton_IGNORE)
+		return false;
 	if (ctrlEvent.button == ControllerButton_BUTTON_BACK) {
-		if (ctrlEvent.up && simulating) {
-			rightStickX = rightStickY = 0;
-			simulating = false;
+		if (SimulatingMouseWithSelectAndDPad) {
+			if (ctrlEvent.up) {
+				rightStickX = rightStickY = 0;
+			}
+			return true;
 		}
 		return false;
 	}
-	if (!IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-		return false;
-	switch (ctrlEvent.button) {
-	case ControllerButton_BUTTON_DPAD_LEFT:
-		rightStickX = ctrlEvent.up ? 0.F : -1.F;
-		break;
-	case ControllerButton_BUTTON_DPAD_RIGHT:
-		rightStickX = ctrlEvent.up ? 0.F : 1.F;
-		break;
-	case ControllerButton_BUTTON_DPAD_UP:
-		rightStickY = ctrlEvent.up ? 0.F : 1.F;
-		break;
-	case ControllerButton_BUTTON_DPAD_DOWN:
-		rightStickY = ctrlEvent.up ? 0.F : -1.F;
-		break;
-	default:
+
+	if (!IsControllerButtonPressed(ControllerButton_BUTTON_BACK)) {
+		SetSimulatingMouseWithDpad(false);
 		return false;
 	}
-	simulating = !(rightStickX == 0 && rightStickY == 0);
+	switch (ctrlEvent.button) {
+	case ControllerButton_BUTTON_DPAD_LEFT:
+		if (ctrlEvent.up) {
+			rightStickX = 0;
+		} else {
+			rightStickX = -1.F;
+			SetSimulatingMouseWithDpad(true);
+		}
+		break;
+	case ControllerButton_BUTTON_DPAD_RIGHT:
+		if (ctrlEvent.up) {
+			rightStickX = 0;
+		} else {
+			rightStickX = 1.F;
+			SetSimulatingMouseWithDpad(true);
+		}
+		break;
+	case ControllerButton_BUTTON_DPAD_UP:
+		if (ctrlEvent.up) {
+			rightStickY = 0;
+		} else {
+			rightStickY = 1.F;
+			SetSimulatingMouseWithDpad(true);
+		}
+		break;
+	case ControllerButton_BUTTON_DPAD_DOWN:
+		if (ctrlEvent.up) {
+			rightStickY = 0;
+		} else {
+			rightStickY = -1.F;
+			SetSimulatingMouseWithDpad(true);
+		}
+		break;
+	default:
+		if (!IsSimulatedMouseClickBinding(ctrlEvent)) {
+			SetSimulatingMouseWithDpad(false);
+		}
+		return false;
+	}
 
 	return true;
 }
@@ -133,17 +179,21 @@ bool ProcessControllerMotion(const SDL_Event &event, ControllerButtonEvent ctrlE
 	GameController *const controller = GameController::Get(event);
 	if (controller != nullptr && devilution::GameController::ProcessAxisMotion(event)) {
 		ScaleJoysticks();
+		SetSimulatingMouseWithDpad(false);
 		return true;
 	}
 #endif
 	Joystick *const joystick = Joystick::Get(event);
 	if (joystick != nullptr && devilution::Joystick::ProcessAxisMotion(event)) {
 		ScaleJoysticks();
+		SetSimulatingMouseWithDpad(false);
 		return true;
 	}
 #if HAS_KBCTRL == 1
-	if (ProcessKbCtrlAxisMotion(event))
+	if (ProcessKbCtrlAxisMotion(event)) {
+		SetSimulatingMouseWithDpad(false);
 		return true;
+	}
 #endif
 	return SimulateRightStickWithDpad(ctrlEvent);
 }
@@ -155,16 +205,20 @@ AxisDirection GetLeftStickOrDpadDirection(bool allowDpad)
 
 	AxisDirection result { AxisDirectionX_NONE, AxisDirectionY_NONE };
 
+	allowDpad = allowDpad && !IsControllerButtonPressed(ControllerButton_BUTTON_START);
+
 	bool isUpPressed = stickY >= 0.5 || (allowDpad && IsControllerButtonPressed(ControllerButton_BUTTON_DPAD_UP));
 	bool isDownPressed = stickY <= -0.5 || (allowDpad && IsControllerButtonPressed(ControllerButton_BUTTON_DPAD_DOWN));
 	bool isLeftPressed = stickX <= -0.5 || (allowDpad && IsControllerButtonPressed(ControllerButton_BUTTON_DPAD_LEFT));
 	bool isRightPressed = stickX >= 0.5 || (allowDpad && IsControllerButtonPressed(ControllerButton_BUTTON_DPAD_RIGHT));
 
-#ifdef VIRTUAL_GAMEPAD
-	isUpPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isUpPressed;
-	isDownPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isDownPressed;
-	isLeftPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isLeftPressed;
-	isRightPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isRightPressed;
+#ifndef USE_SDL1
+	if (ControlMode == ControlTypes::VirtualGamepad) {
+		isUpPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isUpPressed;
+		isDownPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isDownPressed;
+		isLeftPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isLeftPressed;
+		isRightPressed |= VirtualGamepadState.isActive && VirtualGamepadState.directionPad.isRightPressed;
+	}
 #endif
 
 	if (isUpPressed) {

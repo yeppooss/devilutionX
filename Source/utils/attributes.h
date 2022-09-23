@@ -31,3 +31,28 @@
 #else
 #define DVL_ATTRIBUTE_HOT
 #endif
+
+// Any global data used by tests must be marked with `DVL_API_FOR_TEST`.
+#if defined(_MSC_VER) && defined(BUILD_TESTING)
+#ifdef _DVL_EXPORTING
+#define DVL_API_FOR_TEST __declspec(dllexport)
+#else
+#define DVL_API_FOR_TEST __declspec(dllimport)
+#endif
+#else
+#define DVL_API_FOR_TEST
+#endif
+
+#if defined(__clang__)
+#define DVL_REINITIALIZES [[clang::reinitializes]]
+#elif DVL_HAVE_ATTRIBUTE(reinitializes)
+#define DVL_REINITIALIZES __attribute__((reinitializes))
+#else
+#define DVL_REINITIALIZES
+#endif
+
+#if ((defined(__GNUC__) || defined(__clang__)) && !defined(__EXCEPTIONS)) || defined(_MSC_VER) && !_HAS_EXCEPTIONS
+#define DVL_EXCEPTIONS 0
+#else
+#define DVL_EXCEPTIONS 1
+#endif

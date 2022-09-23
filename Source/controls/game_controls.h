@@ -1,12 +1,19 @@
 #pragma once
 
-#include <cstdint>
 #include <SDL.h>
+#include <cstdint>
 
-#include "controls/controller.h"
 #include "./axis_direction.h"
+#include "controls/controller.h"
 
 namespace devilution {
+
+enum class GamepadLayout : uint8_t {
+	Generic,
+	Nintendo,
+	PlayStation,
+	Xbox,
+};
 
 enum GameActionType : uint8_t {
 	GameActionType_NONE,
@@ -21,20 +28,10 @@ enum GameActionType : uint8_t {
 	GameActionType_TOGGLE_SPELL_BOOK,
 	GameActionType_TOGGLE_QUEST_LOG,
 	GameActionType_SEND_KEY,
-	GameActionType_SEND_MOUSE_CLICK,
 };
 
 struct GameActionSendKey {
-	Uint32 vk_code;
-	bool up;
-};
-
-struct GameActionSendMouseClick {
-	enum Button : uint8_t {
-		LEFT,
-		RIGHT,
-	};
-	Button button;
+	uint32_t vk_code;
 	bool up;
 };
 
@@ -57,23 +54,21 @@ struct GameAction {
 	{
 	}
 
-	GameAction(GameActionSendMouseClick send_mouse_click)
-	    : type(GameActionType_SEND_MOUSE_CLICK)
-	    , send_mouse_click(send_mouse_click)
-	{
-	}
-
 	union {
 		GameActionSendKey send_key;
-		GameActionSendMouseClick send_mouse_click;
 	};
 };
 
 bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, GameAction *action);
 
+bool IsSimulatedMouseClickBinding(ControllerButtonEvent ctrlEvent);
+
 AxisDirection GetMoveDirection();
 
 extern bool start_modifier_active;
 extern bool select_modifier_active;
+extern const ControllerButton ControllerButtonPrimary;
+extern const ControllerButton ControllerButtonSecondary;
+extern const ControllerButton ControllerButtonTertiary;
 
 } // namespace devilution

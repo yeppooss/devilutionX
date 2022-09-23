@@ -1,16 +1,17 @@
 #pragma once
 
-#include <string>
-#include <memory>
 #include <array>
+#include <memory>
+#include <string>
+
 #include <asio/ts/buffer.hpp>
 #include <asio/ts/internet.hpp>
 #include <asio/ts/io_context.hpp>
 #include <asio/ts/net.hpp>
 
-#include "dvlnet/packet.h"
 #include "dvlnet/abstract_net.h"
 #include "dvlnet/frame_queue.h"
+#include "dvlnet/packet.h"
 #include "multi.h"
 
 namespace devilution {
@@ -67,7 +68,6 @@ private:
 	void HandleReceive(const scc &con, const asio::error_code &ec, size_t bytesRead);
 	void HandleReceiveNewPlayer(const scc &con, packet &pkt);
 	void HandleReceivePacket(packet &pkt);
-	void SendConnect(const scc &con);
 	void SendPacket(packet &pkt);
 	void StartSend(const scc &con, packet &pkt);
 	void HandleSend(const scc &con, const asio::error_code &ec, size_t bytesSent);
@@ -76,5 +76,5 @@ private:
 	void DropConnection(const scc &con);
 };
 
-} //namespace net
-} //namespace devilution
+} // namespace net
+} // namespace devilution

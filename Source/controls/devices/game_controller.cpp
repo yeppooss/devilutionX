@@ -1,22 +1,23 @@
 #include "controls/devices/game_controller.h"
 
-#ifndef USE_SDL1
-
 #include <cstddef>
 
 #include "controls/controller_motion.h"
 #include "controls/devices/joystick.h"
 #include "utils/log.hpp"
-#include "utils/sdl_ptrs.h"
 #include "utils/sdl2_backports.h"
+#include "utils/sdl_ptrs.h"
 #include "utils/stubs.h"
 
 namespace devilution {
 
-// Defined in SourceX/controls/plctrls.cpp
-extern bool sgbControllerActive;
-
 std::vector<GameController> GameController::controllers_;
+
+void GameController::UnlockTriggerState()
+{
+	trigger_left_state_ = ControllerButton_NONE;
+	trigger_right_state_ = ControllerButton_NONE;
+}
 
 ControllerButton GameController::ToControllerButton(const SDL_Event &event)
 {
@@ -29,18 +30,18 @@ ControllerButton GameController::ToControllerButton(const SDL_Event &event)
 			}
 			if (event.caxis.value > 16384 && !trigger_left_is_down_) { // 50% pressed
 				trigger_left_is_down_ = true;
-				return ControllerButton_AXIS_TRIGGERLEFT;
+				trigger_left_state_ = ControllerButton_AXIS_TRIGGERLEFT;
 			}
-			return ControllerButton_NONE;
+			return trigger_left_state_;
 		case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:
 			if (event.caxis.value < 8192) { // 25% pressed
 				trigger_right_is_down_ = false;
 			}
 			if (event.caxis.value > 16384 && !trigger_right_is_down_) { // 50% pressed
 				trigger_right_is_down_ = true;
-				return ControllerButton_AXIS_TRIGGERRIGHT;
+				trigger_right_state_ = ControllerButton_AXIS_TRIGGERRIGHT;
 			}
-			return ControllerButton_NONE;
+			return trigger_right_state_;
 		}
 		break;
 	case SDL_CONTROLLERBUTTONDOWN:
@@ -123,6 +124,10 @@ SDL_GameControllerButton GameController::ToSdlGameControllerButton(ControllerBut
 
 bool GameController::IsPressed(ControllerButton button) const
 {
+	if (button == ControllerButton_AXIS_TRIGGERLEFT)
+		return trigger_left_is_down_;
+	if (button == ControllerButton_AXIS_TRIGGERRIGHT)
+		return trigger_right_is_down_;
 	const SDL_GameControllerButton gcButton = ToSdlGameControllerButton(button);
 	return SDL_GameControllerHasButton(sdl_game_controller_, gcButton) && SDL_GameControllerGetButton(sdl_game_controller_, gcButton) != 0;
 }
@@ -183,7 +188,6 @@ void GameController::Remove(SDL_JoystickID instanceId)
 		if (controller.instance_id_ != instanceId)
 			continue;
 		controllers_.erase(controllers_.begin() + i);
-		sgbControllerActive = !controllers_.empty();
 		return;
 	}
 	Log("Game controller not found with instance id: {}", instanceId);
@@ -205,7 +209,7 @@ GameController *GameController::Get(const SDL_Event &event)
 		return Get(event.caxis.which);
 	case SDL_CONTROLLERBUTTONDOWN:
 	case SDL_CONTROLLERBUTTONUP:
-		return Get(event.jball.which);
+		return Get(event.cbutton.which);
 	default:
 		return nullptr;
 	}
@@ -216,13 +220,47 @@ const std::vector<GameController> &GameController::All()
 	return controllers_;
 }
 
-bool GameController::IsPressedOnAnyController(ControllerButton button)
+bool GameController::IsPressedOnAnyController(ControllerButton button, SDL_JoystickID *which)
 {
 	for (auto &controller : controllers_)
-		if (controller.IsPressed(button))
+		if (controller.IsPressed(button)) {
+			if (which != nullptr)
+				*which = controller.instance_id_;
+
 			return true;
+		}
 	return false;
 }
 
-} // namespace devilution
+GamepadLayout GameController::getLayout(const SDL_Event &event)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+	const int index = event.cdevice.which;
+	const SDL_GameControllerType gamepadType = SDL_GameControllerTypeForIndex(index);
+	switch (gamepadType) {
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+		return GamepadLayout::Nintendo;
+	case SDL_CONTROLLER_TYPE_PS3:
+	case SDL_CONTROLLER_TYPE_PS4:
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	case SDL_CONTROLLER_TYPE_PS5:
 #endif
+		return GamepadLayout::PlayStation;
+	case SDL_CONTROLLER_TYPE_XBOXONE:
+	case SDL_CONTROLLER_TYPE_XBOX360:
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+	case SDL_CONTROLLER_TYPE_GOOGLE_STADIA:
+	case SDL_CONTROLLER_TYPE_AMAZON_LUNA:
+#endif
+		return GamepadLayout::Xbox;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	case SDL_CONTROLLER_TYPE_VIRTUAL:
+#endif
+	case SDL_CONTROLLER_TYPE_UNKNOWN:
+		return GamepadLayout::Generic;
+	}
+#endif
+	return GamepadLayout::Generic;
+}
+
+} // namespace devilution

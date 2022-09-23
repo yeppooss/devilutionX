@@ -8,18 +8,54 @@
       "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
       "inheritEnvironments": [ "msvc_x64" ],
       "intelliSenseMode": "windows-msvc-x64",
-      "enableClangTidyCodeAnalysis": true
+      "enableClangTidyCodeAnalysis": true,
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
     },
     {
-      "name": "x64-Debug-UnitTests",
+      "name": "x64-Debug-Translations",
       "generator": "Ninja",
       "configurationType": "Debug",
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
       "inheritEnvironments": [ "msvc_x64" ],
       "intelliSenseMode": "windows-msvc-x64",
-      "cmakeCommandArgs": "-DRUN_TESTS=ON",
-      "enableClangTidyCodeAnalysis": true
+      "enableClangTidyCodeAnalysis": true,
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "USE_GETTEXT_FROM_VCPKG",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Debug-SDL1",
+      "generator": "Ninja",
+      "configurationType": "Debug",
+      "buildRoot": "${workspaceRoot}\\build\\${name}",
+      "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
+      "inheritEnvironments": [ "msvc_x64" ],
+      "intelliSenseMode": "windows-msvc-x64",
+      "cmakeCommandArgs": "-DUSE_SDL1=ON",
+      "enableClangTidyCodeAnalysis": true,
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
     },
     {
       "name": "x64-Release",
@@ -27,10 +63,17 @@
       "configurationType": "Release",
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
-      "cmakeCommandArgs": "-DBINARY_RELEASE=ON",
+      "cmakeCommandArgs": "-DCPACK=ON",
       "inheritEnvironments": [ "msvc_x64" ],
       "intelliSenseMode": "windows-msvc-x64",
-      "enableClangTidyCodeAnalysis": true
+      "enableClangTidyCodeAnalysis": true,
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
     },
     {
       "name": "x86-Debug",
@@ -40,18 +83,14 @@
       "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
       "inheritEnvironments": [ "msvc_x86" ],
       "intelliSenseMode": "windows-msvc-x86",
-      "enableClangTidyCodeAnalysis": true
-    },
-    {
-      "name": "x86-Debug-UnitTests",
-      "generator": "Ninja",
-      "configurationType": "Debug",
-      "buildRoot": "${workspaceRoot}\\build\\${name}",
-      "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
-      "inheritEnvironments": [ "msvc_x86" ],
-      "intelliSenseMode": "windows-msvc-x86",
-      "cmakeCommandArgs": "-DRUN_TESTS=ON",
-      "enableClangTidyCodeAnalysis": true
+      "enableClangTidyCodeAnalysis": true,
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
     },
     {
       "name": "x86-Release",
@@ -59,13 +98,20 @@
       "configurationType": "Release",
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
-      "cmakeCommandArgs": "-DBINARY_RELEASE=ON",
+      "cmakeCommandArgs": "-DCPACK=ON",
       "inheritEnvironments": [ "msvc_x86" ],
       "intelliSenseMode": "windows-msvc-x86",
-      "enableClangTidyCodeAnalysis": true
+      "enableClangTidyCodeAnalysis": true,
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
     },
     {
-      "name": "WSL-GCC-x64-Debug",
+      "name": "x64-Debug-WSL-GCC",
       "generator": "Ninja",
       "configurationType": "Debug",
       "buildRoot": "${workspaceRoot}\\build\\${name}",
@@ -76,7 +122,13 @@
       "ctestCommandArgs": "",
       "inheritEnvironments": [ "linux_x64" ],
       "wslPath": "${defaultWSLPath}",
-      "variables": []
+      "variables": [
+        {
+          "name": "DISCORD_INTEGRATION",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
     }
   ]
 }

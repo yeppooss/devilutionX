@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include "path.h"
+#include "engine/path.h"
 
 // The following headers are included to access globals used in functions that have not been isolated yet.
-#include "gendung.h"
+#include "levels/gendung.h"
 #include "objects.h"
 
 namespace devilution {
@@ -45,12 +45,12 @@ TEST(PathTest, Heuristics)
 TEST(PathTest, Solid)
 {
 	dPiece[5][5] = 0;
-	nSolidTable[0] = true;
+	SOLData[0] = TileProperties::Solid;
 	EXPECT_TRUE(IsTileSolid({ 5, 5 })) << "Solid in-bounds tiles are solid";
 	EXPECT_FALSE(IsTileNotSolid({ 5, 5 })) << "IsTileNotSolid returns the inverse of IsTileSolid for in-bounds tiles";
 
 	dPiece[6][6] = 1;
-	nSolidTable[1] = false;
+	SOLData[1] = TileProperties::None;
 	EXPECT_FALSE(IsTileSolid({ 6, 6 })) << "Non-solid in-bounds tiles are not solid";
 	EXPECT_TRUE(IsTileNotSolid({ 6, 6 })) << "IsTileNotSolid returns the inverse of IsTileSolid for in-bounds tiles";
 
@@ -64,13 +64,13 @@ TEST(PathTest, SolidPieces)
 	dPiece[0][1] = 0;
 	dPiece[1][0] = 0;
 	dPiece[1][1] = 0;
-	nSolidTable[0] = false;
+	SOLData[0] = TileProperties::None;
 	EXPECT_TRUE(path_solid_pieces({ 0, 0 }, { 1, 1 })) << "A step in open space is free of solid pieces";
 	EXPECT_TRUE(path_solid_pieces({ 1, 1 }, { 0, 0 })) << "A step in open space is free of solid pieces";
 	EXPECT_TRUE(path_solid_pieces({ 1, 0 }, { 0, 1 })) << "A step in open space is free of solid pieces";
 	EXPECT_TRUE(path_solid_pieces({ 0, 1 }, { 1, 0 })) << "A step in open space is free of solid pieces";
 
-	nSolidTable[1] = true;
+	SOLData[1] = TileProperties::Solid;
 	dPiece[1][0] = 1;
 	EXPECT_TRUE(path_solid_pieces({ 0, 1 }, { 1, 0 })) << "Can path to a destination which is solid";
 	EXPECT_TRUE(path_solid_pieces({ 1, 0 }, { 0, 1 })) << "Can path from a starting position which is solid";
@@ -103,22 +103,22 @@ TEST(PathTest, SolidPieces)
 
 void CheckPath(Point startPosition, Point destinationPosition, std::vector<int8_t> expectedSteps)
 {
-	static int8_t pathSteps[MAX_PATH_LENGTH];
+	static int8_t pathSteps[MaxPathLength];
 	auto pathLength = FindPath([](Point) { return true; }, startPosition, destinationPosition, pathSteps);
 
 	EXPECT_EQ(pathLength, expectedSteps.size()) << "Wrong path length for a path from " << startPosition << " to " << destinationPosition;
 	// Die early if the wrong path length is returned as we don't want to read oob in expectedSteps
 	ASSERT_LE(pathLength, expectedSteps.size()) << "Path is longer than expected.";
 
-	for (auto i = 0; i < pathLength; i++) {
+	for (int i = 0; i < pathLength; i++) {
 		EXPECT_EQ(pathSteps[i], expectedSteps[i]) << "Path step " << i << " differs from expectation for a path from "
 		                                          << startPosition << " to " << destinationPosition; // this shouldn't be a requirement but...
 
 		// Path directions are all jacked up compared to the Direction enum. Most consumers have their own mapping definition
-		//startPosition += Direction { path[i] - 1 };
+		// startPosition += Direction { path[i] - 1 };
 	}
 	// Given that we can't really make any assumptions about how the path is actually used.
-	//EXPECT_EQ(startPosition, destinationPosition) << "Path doesn't lead to destination";
+	// EXPECT_EQ(startPosition, destinationPosition) << "Path doesn't lead to destination";
 }
 
 TEST(PathTest, FindPath)
@@ -137,14 +137,27 @@ TEST(PathTest, FindPath)
 	CheckPath({ 8, 8 }, { 12, 20 }, { 7, 7, 7, 7, 4, 4, 4, 4, 4, 4, 4, 4 });
 }
 
+TEST(PathTest, LongPaths)
+{
+	// Starting from the middle of the world and trying to path to a border exceeds the maximum path size
+	CheckPath({ 56, 56 }, { 0, 0 }, {});
+
+	// Longest possible path is currently 24 steps meaning tiles 24 units away are reachable
+	Point startingPosition { 56, 56 };
+	CheckPath(startingPosition, startingPosition + Displacement { 24, 24 }, std::vector<int8_t>(24, 7));
+
+	// But trying to navigate 25 units fails
+	CheckPath(startingPosition, startingPosition + Displacement { 25, 25 }, {});
+}
+
 TEST(PathTest, Walkable)
 {
 	dPiece[5][5] = 0;
-	nSolidTable[0] = true; // Doing this manually to save running through the code in gendung.cpp
+	SOLData[0] = TileProperties::Solid; // Doing this manually to save running through the code in gendung.cpp
 	EXPECT_FALSE(IsTileWalkable({ 5, 5 })) << "Tile which is marked as solid should be considered blocked";
 	EXPECT_FALSE(IsTileWalkable({ 5, 5 }, true)) << "Solid non-door tiles remain unwalkable when ignoring doors";
 
-	nSolidTable[0] = false;
+	SOLData[0] = TileProperties::None;
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 })) << "Non-solid tiles are walkable";
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 }, true)) << "Non-solid tiles remain walkable when ignoring doors";
 
@@ -161,7 +174,7 @@ TEST(PathTest, Walkable)
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 })) << "Tile occupied by an open door is walkable";
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 }, true)) << "Tile occupied by a door is considered walkable when ignoring doors";
 
-	nSolidTable[0] = true;
+	SOLData[0] = TileProperties::Solid;
 	EXPECT_FALSE(IsTileWalkable({ 5, 5 })) << "Solid tiles occupied by an open door remain unwalkable";
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 }, true)) << "Solid tiles occupied by an open door become walkable when ignoring doors";
 }
@@ -180,12 +193,12 @@ TEST(PathTest, FindClosest)
 
 		EXPECT_FALSE(nearPosition) << "Searching with no valid tiles should return an empty optional";
 
-		for (int x = 0; x < searchedTiles.size(); x++) {
-			for (int y = 0; y < searchedTiles[x].size(); y++) {
-				if (IsAnyOf(x, 0, 100) && IsAnyOf(y, 0, 100)) {
+		for (size_t x = 0; x < searchedTiles.size(); x++) {
+			for (size_t y = 0; y < searchedTiles[x].size(); y++) {
+				if ((x == 0 || x == 100) && (y == 0 || y == 100)) {
 					EXPECT_EQ(searchedTiles[x][y], 0) << "Extreme corners should be skipped due to the inset/rounded search space";
 				} else {
-					EXPECT_EQ(searchedTiles[x][y], 1) << "Position " << Point { x, y } << " should have been searched exactly once";
+					EXPECT_EQ(searchedTiles[x][y], 1) << "Position " << x << " " << y << " should have been searched exactly once";
 				}
 			}
 		}
@@ -202,11 +215,11 @@ TEST(PathTest, FindClosest)
 
 		EXPECT_FALSE(nearPosition) << "Still shouldn't find a valid position with no valid tiles";
 
-		for (int x = 0; x < searchedTiles.size(); x++) {
-			for (int y = 0; y < searchedTiles[x].size(); y++) {
-				if (Point { x, y } == Point { 2, 2 }) {
+		for (size_t x = 0; x < searchedTiles.size(); x++) {
+			for (size_t y = 0; y < searchedTiles[x].size(); y++) {
+				if (x == 2 && y == 2) {
 					EXPECT_EQ(searchedTiles[x][y], 0) << "The starting tile should be skipped with a min radius of 1";
-				} else if (IsAnyOf(x, 0, 4) && IsAnyOf(y, 0, 4)) {
+				} else if ((x == 0 || x == 4) && (y == 0 || y == 4)) {
 					EXPECT_EQ(searchedTiles[x][y], 0) << "Corners should be skipped";
 				} else {
 					EXPECT_EQ(searchedTiles[x][y], 1) << "All tiles in range should be searched exactly once";
@@ -226,12 +239,12 @@ TEST(PathTest, FindClosest)
 
 		EXPECT_FALSE(nearPosition) << "Searching with no valid tiles should return an empty optional";
 
-		for (int x = 0; x < searchedTiles.size(); x++) {
-			for (int y = 0; y < searchedTiles[x].size(); y++) {
-				if (Point { x, y } == Point { 1, 1 }) {
+		for (size_t x = 0; x < searchedTiles.size(); x++) {
+			for (size_t y = 0; y < searchedTiles[x].size(); y++) {
+				if (x == 1 && y == 1) {
 					EXPECT_EQ(searchedTiles[x][y], 1) << "Only the starting tile should be searched with max radius 0";
 				} else {
-					EXPECT_EQ(searchedTiles[x][y], 0) << "Position " << Point { x, y } << " should not have been searched";
+					EXPECT_EQ(searchedTiles[x][y], 0) << "Position " << x << " " << y << " should not have been searched";
 				}
 			}
 		}
@@ -249,15 +262,15 @@ TEST(PathTest, FindClosest)
 
 		EXPECT_FALSE(nearPosition) << "Searching with no valid tiles should return an empty optional";
 
-		for (int x = 0; x < searchedTiles.size(); x++) {
-			for (int y = 0; y < searchedTiles[x].size(); y++) {
-				if ((IsAnyOf(x, 1, 5) && IsAnyOf(y, 1, 5))     // inset corners
-				    || (IsAnyOf(x, 0, 6) && IsNoneOf(y, 0, 6)) // left/right sides
-				    || (IsNoneOf(x, 0, 6) && IsAnyOf(y, 0, 6)) // top/bottom sides
+		for (size_t x = 0; x < searchedTiles.size(); x++) {
+			for (size_t y = 0; y < searchedTiles[x].size(); y++) {
+				if (((x == 1 || x == 5) && (y == 1 || y == 5))  // inset corners
+				    || ((x == 0 || x == 6) && y != 0 && y != 6) // left/right sides
+				    || (x != 0 && x != 6 && (y == 0 || y == 6)) // top/bottom sides
 				) {
 					EXPECT_EQ(searchedTiles[x][y], 1) << "Searching with a fixed radius should make a square with inset corners";
 				} else {
-					EXPECT_EQ(searchedTiles[x][y], 0) << "Position " << Point { x, y } << " should not have been searched";
+					EXPECT_EQ(searchedTiles[x][y], 0) << "Position " << x << " " << y << " should not have been searched";
 				}
 			}
 		}

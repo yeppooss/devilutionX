@@ -1,12 +1,13 @@
 #pragma once
 
-#include <SDL.h>
 #include <cerrno>
+#include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <cmath>
-#include <cstddef>
+
+#include <SDL.h>
 
 #include "utils/attributes.h"
 #include "utils/console.h"
@@ -31,6 +32,7 @@
 
 #define SDL_Keysym SDL_keysym
 #define SDL_Keycode SDLKey
+#define SDL_Keymod SDLMod
 
 #define SDLK_PRINTSCREEN SDLK_PRINT
 #define SDLK_SCROLLLOCK SDLK_SCROLLOCK
@@ -45,6 +47,7 @@
 #define SDLK_KP_8 SDLK_KP8
 #define SDLK_KP_9 SDLK_KP9
 #define SDLK_KP_0 SDLK_KP0
+#define SDLK_KP_COMMA SDLK_COMMA
 #define SDLK_LGUI SDLK_LSUPER
 #define SDLK_RGUI SDLK_RSUPER
 
@@ -163,7 +166,6 @@ inline void SDL_GetWindowSize(SDL_Window *window, int *w, int *h)
 
 inline void SDL_DestroyWindow(SDL_Window *window)
 {
-	SDL_FreeSurface(window);
 }
 
 inline void

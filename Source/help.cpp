@@ -6,10 +6,11 @@
 #include <string>
 #include <vector>
 
-#include "control.h"
+#include "DiabloUI/ui_flags.hpp"
 #include "engine/render/text_render.hpp"
 #include "init.h"
 #include "minitext.h"
+#include "qol/chatlog.h"
 #include "stores.h"
 #include "utils/language.h"
 #include "utils/stdcompat/string_view.hpp"
@@ -98,8 +99,6 @@ std::vector<std::string> HelpTextLines;
 
 constexpr int PaddingTop = 32;
 constexpr int PaddingLeft = 32;
-constexpr int ContentPaddingTop = 19;
-constexpr int ContentOuterHeight = 180;
 
 constexpr int PanelHeight = 297;
 constexpr int ContentTextWidth = 577;
@@ -148,12 +147,9 @@ void InitHelp()
 		return;
 
 	HelpFlag = false;
-	char tempString[1024];
 
 	for (const auto *text : HelpText) {
-		strcpy(tempString, _(text));
-
-		const std::string paragraph = WordWrapString(tempString, 577);
+		const std::string paragraph = WordWrapString(_(text), 577);
 
 		size_t previous = 0;
 		while (true) {
@@ -176,14 +172,15 @@ void DrawHelp(const Surface &out)
 	const int lineHeight = LineHeight();
 	const int blankLineHeight = BlankLineHeight();
 
-	const char *title;
+	string_view title;
 	if (gbIsHellfire)
 		title = gbIsSpawn ? _("Shareware Hellfire Help") : _("Hellfire Help");
 	else
 		title = gbIsSpawn ? _("Shareware Diablo Help") : _("Diablo Help");
 
-	const int sx = PANEL_X + PaddingLeft;
-	const int sy = UI_OFFSET_Y;
+	const Point uiPosition = GetUIRectangle().position;
+	const int sx = uiPosition.x + PaddingLeft;
+	const int sy = uiPosition.y;
 
 	DrawString(out, title,
 	    { { sx, sy + PaddingTop + blankLineHeight }, { ContentTextWidth, lineHeight } },
@@ -219,6 +216,7 @@ void DisplayHelp()
 {
 	SkipLines = 0;
 	HelpFlag = true;
+	ChatLogFlag = false;
 }
 
 void HelpScrollUp()

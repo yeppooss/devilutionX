@@ -5,29 +5,32 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
+#include <SDL.h>
+
+#ifdef USE_SDL1
+#include "utils/sdl2_to_1_2_backports.h"
+#endif
+
+#include "DiabloUI/ui_flags.hpp"
 #include "engine.h"
 #include "engine/point.hpp"
 #include "engine/rectangle.hpp"
 #include "engine/render/text_render.hpp"
+#include "panels/ui_panels.hpp"
 #include "spelldat.h"
 #include "spells.h"
+#include "utils/attributes.h"
 #include "utils/stdcompat/optional.hpp"
 #include "utils/stdcompat/string_view.hpp"
+#include "utils/string_or_view.hpp"
 #include "utils/ui_fwd.h"
 
 namespace devilution {
 
-#define PANEL_WIDTH 640
-#define PANEL_HEIGHT 128
-#define PANEL_TOP (gnScreenHeight - PANEL_HEIGHT)
-#define PANEL_LEFT (gnScreenWidth - PANEL_WIDTH) / 2
-#define PANEL_X PANEL_LEFT
-#define PANEL_Y PANEL_TOP
-
-#define SPANEL_WIDTH 320
-#define SPANEL_HEIGHT 352
+constexpr Size SidePanelSize { 320, 352 };
 
 extern bool drawhpflag;
 extern bool dropGoldFlag;
@@ -36,16 +39,15 @@ extern bool lvlbtndown;
 extern int dropGoldValue;
 extern bool drawmanaflag;
 extern bool chrbtnactive;
-extern int pnumlines;
+extern DVL_API_FOR_TEST int pnumlines;
 extern UiFlags InfoColor;
-extern char tempstr[256];
 extern int sbooktab;
 extern int8_t initialDropGoldIndex;
 extern bool talkflag;
 extern bool sbookflag;
 extern bool chrflag;
 extern bool drawbtnflag;
-extern char infostr[128];
+extern StringOrView InfoString;
 extern bool panelflag;
 extern int initialDropGoldValue;
 extern bool panbtndown;
@@ -53,22 +55,26 @@ extern bool spselflag;
 const Rectangle &GetMainPanel();
 const Rectangle &GetLeftPanel();
 const Rectangle &GetRightPanel();
+bool IsLeftPanelOpen();
+bool IsRightPanelOpen();
 extern std::optional<OwnedSurface> pBtmBuff;
+extern OptionalOwnedClxSpriteList pGBoxBuff;
 extern SDL_Rect PanBtnPos[8];
 
+void CalculatePanelAreas();
 bool IsChatAvailable();
 /**
  * @brief Check if the UI can cover the game area entierly
  */
 inline bool CanPanelsCoverView()
 {
-	return GetScreenWidth() <= PANEL_WIDTH && GetScreenHeight() <= SPANEL_HEIGHT + PANEL_HEIGHT;
+	const Rectangle &mainPanel = GetMainPanel();
+	return GetScreenWidth() <= mainPanel.size.width && GetScreenHeight() <= SidePanelSize.height + mainPanel.size.height;
 }
-
 void DrawSpellList(const Surface &out);
 void SetSpell();
-void SetSpeedSpell(int slot);
-void ToggleSpell(int slot);
+void SetSpeedSpell(size_t slot);
+void ToggleSpell(size_t slot);
 
 void AddPanelString(string_view str);
 void ClearPanel();
@@ -102,6 +108,11 @@ void DrawManaFlaskUpper(const Surface &out);
 void DrawManaFlaskLower(const Surface &out);
 
 /**
+ * Controls drawing of current / max values (health, mana) within the control panel.
+ */
+void DrawFlaskValues(const Surface &out, Point pos, int currValue, int maxValue);
+
+/**
  * @brief calls on the active player object to update HP/Mana percentage variables
  *
  * This is used to ensure that DrawFlask routines display an accurate representation of the players health/mana
@@ -126,14 +137,8 @@ void DrawCtrlPan(const Surface &out);
 void DrawCtrlBtns(const Surface &out);
 
 /**
- * Draws the "Speed Book": the rows of known spells for quick-setting a spell that
- * show up when you click the spell slot at the control panel.
- */
-void DoSpeedBook();
-
-/**
  * Clears panel button flags.
-*/
+ */
 void ClearPanBtn();
 
 /**
@@ -170,7 +175,7 @@ void DrawDurIcon(const Surface &out);
 void RedBack(const Surface &out);
 void DrawSpellBook(const Surface &out);
 void DrawGoldSplit(const Surface &out, int amount);
-void control_drop_gold(char vkey);
+void control_drop_gold(SDL_Keycode vkey);
 void DrawTalkPan(const Surface &out);
 bool control_check_talk_btn();
 void control_release_talk_btn();
@@ -178,7 +183,7 @@ void control_type_message();
 void control_reset_talk();
 bool IsTalkActive();
 void control_new_text(string_view text);
-bool control_presskeys(int vkey);
+bool control_presskeys(SDL_Keycode vkey);
 void DiabloHotkeyMsg(uint32_t dwMsg);
 void CloseGoldDrop();
 void GoldDropNewText(string_view text);

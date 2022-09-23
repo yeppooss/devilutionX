@@ -7,9 +7,9 @@
 
 #include <cstdint>
 
-#include "player.h"
 #include "inv.h"
 #include "items.h"
+#include "player.h"
 
 namespace devilution {
 
@@ -38,7 +38,7 @@ struct PlayerPack {
 	uint8_t py;
 	uint8_t targx;
 	uint8_t targy;
-	char pName[PLR_NAME_LEN];
+	char pName[PlayerNameLength];
 	uint8_t pClass;
 	uint8_t pBaseStr;
 	uint8_t pBaseMag;
@@ -55,10 +55,10 @@ struct PlayerPack {
 	int8_t pSplLvl[37]; // Should be MAX_SPELLS but set to 37 to make save games compatible
 	uint64_t pMemSpells;
 	ItemPack InvBody[NUM_INVLOC];
-	ItemPack InvList[NUM_INV_GRID_ELEM];
-	int8_t InvGrid[NUM_INV_GRID_ELEM];
+	ItemPack InvList[InventoryGridCells];
+	int8_t InvGrid[InventoryGridCells];
 	uint8_t _pNumInv;
-	ItemPack SpdList[MAXBELTITEMS];
+	ItemPack SpdList[MaxBeltItems];
 	int8_t pTownWarps;
 	int8_t pDungMsgs;
 	int8_t pLvlLoad;
@@ -74,23 +74,34 @@ struct PlayerPack {
 	int16_t wReserved8;  // For future use
 	uint32_t pDiabloKillLevel;
 	uint32_t pDifficulty;
-	uint32_t pDamAcFlags;
-	int32_t dwReserved[5]; // For future use
+	ItemSpecialEffectHf pDamAcFlags;
+	/**@brief Only used in multiplayer sync (SendPlayerInfo/recv_plrinfo). Never used in save games (single- or multiplayer). */
+	uint8_t friendlyMode;
+	/**@brief Only used in multiplayer sync (SendPlayerInfo/recv_plrinfo). Never used in save games (single- or multiplayer). */
+	uint8_t isOnSetLevel;
+	uint8_t dwReserved[18]; // For future use
 };
 #pragma pack(pop)
 
-void PackPlayer(PlayerPack *pPack, const Player &player, bool manashield);
+void PackPlayer(PlayerPack *pPack, const Player &player, bool manashield, bool netSync);
 bool UnPackPlayer(const PlayerPack *pPack, Player &player, bool netSync);
-void PackItem(ItemPack *id, const Item *is);
 
 /**
- * Expand an ItemPack into an Item
+ * @brief Save the attributes needed to recreate this item into an ItemPack struct
  *
- * Note: last slot of item[MAXITEMS+1] used as temporary buffer
- * find real name reference below, possibly [sizeof(item[])/sizeof(Item)]
- * @param is The source packed item
- * @param id The destination item
+ * @param packedItem The destination packed struct
+ * @param item The source item
+ * @param isHellfire Whether the item is from Hellfire or not
  */
-void UnPackItem(const ItemPack *is, Item *id, bool isHellfire);
+void PackItem(ItemPack &packedItem, const Item &item, bool isHellfire);
+
+/**
+ * Expand a ItemPack in to a Item
+ *
+ * @param packedItem The source packed item
+ * @param item The destination item
+ * @param isHellfire Whether the item is from Hellfire or not
+ */
+void UnPackItem(const ItemPack &packedItem, const Player &player, Item &item, bool isHellfire);
 
 } // namespace devilution

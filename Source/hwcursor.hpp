@@ -13,7 +13,7 @@ namespace devilution {
 inline bool IsHardwareCursorEnabled()
 {
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-	return sgOptions.Graphics.bHardwareCursor;
+	return *sgOptions.Graphics.hardwareCursor && HardwareCursorSupported();
 #else
 	return false;
 #endif
@@ -31,7 +31,7 @@ inline bool SetHardwareCursorVisible(bool visible)
 #endif
 }
 
-enum class CursorType {
+enum class CursorType : uint8_t {
 	Unknown,
 	UserInterface,
 	Game,

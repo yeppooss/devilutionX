@@ -1,35 +1,50 @@
-#include "DiabloUI/art_draw.h"
 #include "DiabloUI/button.h"
+
 #include "DiabloUI/diabloui.h"
-#include "DiabloUI/errorart.h"
+#include "engine/clx_sprite.hpp"
+#include "engine/load_clx.hpp"
+#include "engine/load_pcx.hpp"
+#include "engine/render/clx_render.hpp"
 #include "engine/render/text_render.hpp"
 #include "utils/display.h"
 
 namespace devilution {
 
-Art SmlButton;
+namespace {
 
-void LoadSmlButtonArt()
+OptionalOwnedClxSpriteList ButtonSprites;
+
+} // namespace
+
+void LoadDialogButtonGraphics()
 {
-	LoadArt(&SmlButton, ButtonData, SML_BUTTON_WIDTH, SML_BUTTON_HEIGHT * 2, 2);
+	ButtonSprites = LoadOptionalClx("ui_art\\dvl_but_sml.clx");
+	if (!ButtonSprites) {
+		ButtonSprites = LoadPcxSpriteList("ui_art\\but_sml.pcx", 15);
+	}
 }
 
-void RenderButton(UiButton *button)
+void FreeDialogButtonGraphics()
 {
-	int frame;
-	if (button->m_pressed) {
-		frame = UiButton::PRESSED;
-	} else {
-		frame = UiButton::DEFAULT;
-	}
-	DrawArt({ button->m_rect.x, button->m_rect.y }, button->m_art, frame, button->m_rect.w, button->m_rect.h);
+	ButtonSprites = std::nullopt;
+}
 
-	Rectangle textRect { { button->m_rect.x, button->m_rect.y }, { button->m_rect.w, button->m_rect.h } };
-	if (!button->m_pressed)
+ClxSprite ButtonSprite(bool pressed)
+{
+	return (*ButtonSprites)[pressed ? 1 : 0];
+}
+
+void RenderButton(const UiButton &button)
+{
+	const Surface &out = Surface(DiabloUiSurface()).subregion(button.m_rect.x, button.m_rect.y, button.m_rect.w, button.m_rect.h);
+	RenderClxSprite(out, ButtonSprite(button.IsPressed()), { 0, 0 });
+
+	Rectangle textRect { { 0, 0 }, { button.m_rect.w, button.m_rect.h } };
+	if (!button.IsPressed()) {
 		--textRect.position.y;
+	}
 
-	const Surface &out = Surface(DiabloUiSurface());
-	DrawString(out, button->m_text, textRect, UiFlags::AlignCenter | UiFlags::FontSizeDialog | UiFlags::ColorDialogWhite);
+	DrawString(out, button.GetText(), textRect, UiFlags::AlignCenter | UiFlags::FontSizeDialog | UiFlags::ColorDialogWhite);
 }
 
 bool HandleMouseEventButton(const SDL_Event &event, UiButton *button)
@@ -38,10 +53,13 @@ bool HandleMouseEventButton(const SDL_Event &event, UiButton *button)
 		return false;
 	switch (event.type) {
 	case SDL_MOUSEBUTTONUP:
-		button->m_action();
-		return true;
+		if (button->IsPressed()) {
+			button->Activate();
+			return true;
+		}
+		return false;
 	case SDL_MOUSEBUTTONDOWN:
-		button->m_pressed = true;
+		button->Press();
 		return true;
 	default:
 		return false;
@@ -50,7 +68,7 @@ bool HandleMouseEventButton(const SDL_Event &event, UiButton *button)
 
 void HandleGlobalMouseUpButton(UiButton *button)
 {
-	button->m_pressed = false;
+	button->Release();
 }
 
 } // namespace devilution

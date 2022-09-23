@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <vector>
 
-#include "engine.h"
 #include "effects.h"
+#include "engine.h"
+#include "engine/clx_sprite.hpp"
 #include "utils/stdcompat/cstddef.hpp"
+#include "utils/stdcompat/string_view.hpp"
 
 namespace devilution {
 
@@ -88,31 +90,32 @@ typedef enum missile_graphic_id : uint8_t {
 	MFILE_BONEDEMON,
 	MFILE_EXORA1,
 	MFILE_EXBL3,
-	MFILE_NONE, // BUGFIX: should be `MFILE_NONE = MFILE_SCBSEXPD+1`, i.e. MFILE_NULL, since there would otherwise be an out-of-bounds in SetMissAnim when accessing MissileSpriteData for any of the missiles that have MFILE_NONE as mFileNum in MissileData. (fixed)
+	MFILE_NONE,
 } missile_graphic_id;
 
 /**
  * @brief Specifies what if and how movement distribution is applied
  */
-enum class MissileMovementDistrubution {
+enum class MissileMovementDistribution : uint8_t {
 	/**
-      * @brief No movement distribution is calculated. Normally this means the missile doesn't move at all.
-      */
+	 * @brief No movement distribution is calculated. Normally this means the missile doesn't move at all.
+	 */
 	Disabled,
 	/**
-      * @brief The missile moves and if it hits a enemey it stops (for example firebolt)
-      */
+	 * @brief The missile moves and if it hits a enemey it stops (for example firebolt)
+	 */
 	Blockable,
 	/**
-      * @brief The missile moves and even it hits a enemy it keeps moving (for example flame wave)
-      */
+	 * @brief The missile moves and even it hits a enemy it keeps moving (for example flame wave)
+	 */
 	Unblockable,
 };
 
 struct Missile;
+struct AddMissileParameter;
 
 struct MissileData {
-	void (*mAddProc)(Missile &, Point, Direction);
+	void (*mAddProc)(Missile &, const AddMissileParameter &);
 	void (*mProc)(Missile &);
 	uint8_t mName;
 	bool mDraw;
@@ -121,10 +124,10 @@ struct MissileData {
 	uint8_t mFileNum;
 	_sfx_id mlSFX;
 	_sfx_id miSFX;
-	MissileMovementDistrubution MovementDistribution;
+	MissileMovementDistribution MovementDistribution;
 };
 
-enum class MissileDataFlags {
+enum class MissileDataFlags : uint8_t {
 	// clang-format off
 	None         = 0,
 	MonsterOwned = 1 << 0,
@@ -133,25 +136,38 @@ enum class MissileDataFlags {
 };
 
 struct MissileFileData {
-	const char *name;
+	string_view name;
 	uint8_t animName;
 	uint8_t animFAmt;
 	MissileDataFlags flags;
 	std::array<uint8_t, 16> animDelay = {};
 	std::array<uint8_t, 16> animLen = {};
-	int16_t animWidth;
+	uint16_t animWidth;
 	int16_t animWidth2;
-	std::array<std::unique_ptr<byte[]>, 16> animData;
+	OptionalOwnedClxSpriteListOrSheet sprites;
 
-	MissileFileData(const char *name, uint8_t animName, uint8_t animFAmt, MissileDataFlags flags,
+	MissileFileData(string_view name, uint8_t animName, uint8_t animFAmt, MissileDataFlags flags,
 	    std::initializer_list<uint8_t> animDelay, std::initializer_list<uint8_t> animLen,
-	    int16_t animWidth, int16_t animWidth2);
+	    uint16_t animWidth, int16_t animWidth2);
 
 	void LoadGFX();
 
 	void FreeGFX()
 	{
-		animData = {};
+		sprites = std::nullopt;
+	}
+
+	/**
+	 * @brief Returns the sprite list for a given direction.
+	 *
+	 * @param direction One of the 16 directions. Valid range: [0, 15].
+	 * @return OptionalClxSpriteList
+	 */
+	[[nodiscard]] OptionalClxSpriteList spritesForDirection(size_t direction) const
+	{
+		if (!sprites)
+			return std::nullopt;
+		return sprites->isSheet() ? sprites->sheet()[direction] : sprites->list();
 	}
 };
 

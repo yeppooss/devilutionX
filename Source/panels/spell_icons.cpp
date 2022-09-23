@@ -1,20 +1,21 @@
 #include "panels/spell_icons.hpp"
 
 #include "engine/load_cel.hpp"
-#include "engine/render/cel_render.hpp"
+#include "engine/palette.h"
+#include "engine/render/clx_render.hpp"
 #include "init.h"
-#include "palette.h"
 #include "utils/stdcompat/optional.hpp"
 
 namespace devilution {
 
 namespace {
-std::optional<CelSprite> pSpellCels;
+OptionalOwnedClxSpriteList pSpellCels;
 uint8_t SplTransTbl[256];
 } // namespace
 
 const char SpellITbl[] = {
-	27,
+	26,
+	0,
 	1,
 	2,
 	3,
@@ -23,57 +24,56 @@ const char SpellITbl[] = {
 	6,
 	7,
 	8,
-	9,
-	28,
-	13,
+	27,
 	12,
-	18,
-	16,
-	14,
-	18,
-	19,
 	11,
-	20,
+	17,
 	15,
-	21,
+	13,
+	17,
+	18,
+	10,
+	19,
+	14,
+	20,
+	22,
 	23,
 	24,
+	21,
 	25,
-	22,
-	26,
-	29,
+	28,
+	36,
 	37,
 	38,
-	39,
-	42,
 	41,
 	40,
-	10,
-	36,
-	30,
-	51,
-	51,
+	39,
+	9,
+	35,
+	29,
 	50,
-	46,
-	47,
-	43,
-	45,
-	48,
+	50,
 	49,
+	45,
+	46,
+	42,
 	44,
-	35,
-	35,
-	35,
-	35,
-	35,
+	47,
+	48,
+	43,
+	34,
+	34,
+	34,
+	34,
+	34,
 };
 
 void LoadSpellIcons()
 {
 	if (!gbIsHellfire)
-		pSpellCels = LoadCel("CtrlPan\\SpelIcon.CEL", SPLICONLENGTH);
+		pSpellCels = LoadCel("ctrlpan\\spelicon.cel", SPLICONLENGTH);
 	else
-		pSpellCels = LoadCel("Data\\SpelIcon.CEL", SPLICONLENGTH);
+		pSpellCels = LoadCel("data\\spelicon.cel", SPLICONLENGTH);
 	SetSpellTrans(RSPLTYPE_SKILL);
 }
 
@@ -87,9 +87,9 @@ void DrawSpellCel(const Surface &out, Point position, int nCel)
 	DrawSpellCel(out, position, *pSpellCels, nCel);
 }
 
-void DrawSpellCel(const Surface &out, Point position, const CelSprite &sprite, int nCel)
+void DrawSpellCel(const Surface &out, Point position, const OwnedClxSpriteList &sprite, int nCel)
 {
-	CelDrawLightTo(out, position, sprite, nCel, SplTransTbl);
+	ClxDrawTRN(out, position, sprite[nCel], SplTransTbl);
 }
 
 void SetSpellTrans(spell_type t)

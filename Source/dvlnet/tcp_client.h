@@ -1,15 +1,16 @@
 #pragma once
 
-#include <string>
 #include <memory>
+#include <string>
+
 #include <asio/ts/buffer.hpp>
 #include <asio/ts/internet.hpp>
 #include <asio/ts/io_context.hpp>
 #include <asio/ts/net.hpp>
 
-#include "dvlnet/packet.h"
-#include "dvlnet/frame_queue.h"
 #include "dvlnet/base.h"
+#include "dvlnet/frame_queue.h"
+#include "dvlnet/packet.h"
 #include "dvlnet/tcp_server.h"
 
 namespace devilution {
@@ -17,17 +18,20 @@ namespace net {
 
 class tcp_client : public base {
 public:
-	int create(std::string addrstr);
-	int join(std::string addrstr);
+	int create(std::string addrstr) override;
+	int join(std::string addrstr) override;
 
-	virtual void poll();
-	virtual void send(packet &pkt);
+	void poll() override;
+	void send(packet &pkt) override;
 
-	virtual bool SNetLeaveGame(int type);
+	bool SNetLeaveGame(int type) override;
 
-	virtual ~tcp_client();
+	~tcp_client() override;
 
-	virtual std::string make_default_gamename();
+	std::string make_default_gamename() override;
+
+protected:
+	bool IsGameHost() override;
 
 private:
 	frame_queue recv_queue;

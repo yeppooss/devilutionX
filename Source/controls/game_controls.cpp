@@ -4,7 +4,10 @@
 
 #include "controls/controller.h"
 #include "controls/controller_motion.h"
+#include "miniwin/misc_msg.h"
+#ifndef USE_SDL1
 #include "controls/devices/game_controller.h"
+#endif
 #include "controls/devices/joystick.h"
 #include "controls/menu_controls.h"
 #include "controls/modifier_hints.h"
@@ -13,39 +16,43 @@
 #include "doom.h"
 #include "gmenu.h"
 #include "options.h"
+#include "qol/stash.h"
 #include "stores.h"
 
 namespace devilution {
 
 bool start_modifier_active = false;
 bool select_modifier_active = false;
+const ControllerButton ControllerButtonPrimary = ControllerButton_BUTTON_B;
+const ControllerButton ControllerButtonSecondary = ControllerButton_BUTTON_Y;
+const ControllerButton ControllerButtonTertiary = ControllerButton_BUTTON_X;
 
 namespace {
 
-uint32_t TranslateControllerButtonToKey(ControllerButton controllerButton)
+SDL_Keycode TranslateControllerButtonToKey(ControllerButton controllerButton)
 {
 	switch (controllerButton) {
 	case ControllerButton_BUTTON_A: // Bottom button
-		return QuestLogIsOpen ? DVL_VK_SPACE : DVL_VK_ESCAPE;
+		return QuestLogIsOpen ? SDLK_SPACE : SDLK_ESCAPE;
 	case ControllerButton_BUTTON_B: // Right button
-		return (sgpCurrentMenu != nullptr || stextflag != STORE_NONE || QuestLogIsOpen) ? DVL_VK_RETURN : DVL_VK_SPACE;
+		return (sgpCurrentMenu != nullptr || stextflag != STORE_NONE || QuestLogIsOpen) ? SDLK_RETURN : SDLK_SPACE;
 	case ControllerButton_BUTTON_Y: // Top button
-		return DVL_VK_RETURN;
+		return SDLK_RETURN;
 	case ControllerButton_BUTTON_LEFTSTICK:
-		return DVL_VK_TAB; // Map
+		return SDLK_TAB; // Map
 	case ControllerButton_BUTTON_BACK:
 	case ControllerButton_BUTTON_START:
-		return DVL_VK_ESCAPE;
+		return SDLK_ESCAPE;
 	case ControllerButton_BUTTON_DPAD_LEFT:
-		return DVL_VK_LEFT;
+		return SDLK_LEFT;
 	case ControllerButton_BUTTON_DPAD_RIGHT:
-		return DVL_VK_RIGHT;
+		return SDLK_RIGHT;
 	case ControllerButton_BUTTON_DPAD_UP:
-		return DVL_VK_UP;
+		return SDLK_UP;
 	case ControllerButton_BUTTON_DPAD_DOWN:
-		return DVL_VK_DOWN;
+		return SDLK_DOWN;
 	default:
-		return 0;
+		return SDLK_UNKNOWN;
 	}
 }
 
@@ -77,7 +84,7 @@ bool HandleStartAndSelect(const ControllerButtonEvent &ctrlEvent, GameAction *ac
 	}
 
 	if (startDownReceived && selectDownReceived) {
-		*action = GameActionSendKey { DVL_VK_ESCAPE, ctrlEvent.up };
+		*action = GameActionSendKey { SDLK_ESCAPE, ctrlEvent.up };
 		return true;
 	}
 
@@ -85,7 +92,7 @@ bool HandleStartAndSelect(const ControllerButtonEvent &ctrlEvent, GameAction *ac
 		// If both are down, do nothing because `both_received` will trigger soon.
 		if (startIsDown && selectIsDown)
 			return true;
-		*action = GameActionSendKey { DVL_VK_ESCAPE, ctrlEvent.up };
+		*action = GameActionSendKey { SDLK_ESCAPE, ctrlEvent.up };
 		return true;
 	}
 
@@ -98,68 +105,91 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 {
 	const bool inGameMenu = InGameMenu();
 
-#ifdef VIRTUAL_GAMEPAD
-	if (event.type == SDL_FINGERDOWN) {
-		if (VirtualGamepadState.menuPanel.charButton.isHeld && VirtualGamepadState.menuPanel.charButton.didStateChange) {
-			*action = GameAction(GameActionType_TOGGLE_CHARACTER_INFO);
-			return true;
-		}
-		if (VirtualGamepadState.menuPanel.questsButton.isHeld && VirtualGamepadState.menuPanel.questsButton.didStateChange) {
-			*action = GameAction(GameActionType_TOGGLE_QUEST_LOG);
-			return true;
-		}
-		if (VirtualGamepadState.menuPanel.inventoryButton.isHeld && VirtualGamepadState.menuPanel.inventoryButton.didStateChange) {
-			*action = GameAction(GameActionType_TOGGLE_INVENTORY);
-			return true;
-		}
-		if (VirtualGamepadState.menuPanel.mapButton.isHeld && VirtualGamepadState.menuPanel.mapButton.didStateChange) {
-			*action = GameActionSendKey { DVL_VK_TAB, false };
-			return true;
-		}
-		if (VirtualGamepadState.primaryActionButton.isHeld && VirtualGamepadState.primaryActionButton.didStateChange) {
-			if (!inGameMenu && !QuestLogIsOpen && !sbookflag)
-				*action = GameAction(GameActionType_PRIMARY_ACTION);
-			else if (sgpCurrentMenu != nullptr || stextflag != STORE_NONE || QuestLogIsOpen)
-				*action = GameActionSendKey { DVL_VK_RETURN, false };
-			else
-				*action = GameActionSendKey { DVL_VK_SPACE, false };
-			return true;
-		}
-		if (VirtualGamepadState.secondaryActionButton.isHeld && VirtualGamepadState.secondaryActionButton.didStateChange) {
-			if (!inGameMenu && !QuestLogIsOpen && !sbookflag)
-				*action = GameAction(GameActionType_SECONDARY_ACTION);
-			return true;
-		}
-		if (VirtualGamepadState.spellActionButton.isHeld && VirtualGamepadState.spellActionButton.didStateChange) {
-			if (!inGameMenu && !QuestLogIsOpen && !sbookflag)
-				*action = GameAction(GameActionType_CAST_SPELL);
-			return true;
-		}
-		if (VirtualGamepadState.cancelButton.isHeld && VirtualGamepadState.cancelButton.didStateChange) {
-			if (inGameMenu || DoomFlag || spselflag)
-				*action = GameActionSendKey { DVL_VK_ESCAPE, false };
-			else if (invflag)
-				*action = GameAction(GameActionType_TOGGLE_INVENTORY);
-			else if (sbookflag)
-				*action = GameAction(GameActionType_TOGGLE_SPELL_BOOK);
-			else if (QuestLogIsOpen)
-				*action = GameAction(GameActionType_TOGGLE_QUEST_LOG);
-			else if (chrflag)
+#ifndef USE_SDL1
+	if (ControlMode == ControlTypes::VirtualGamepad) {
+		if (event.type == SDL_FINGERDOWN) {
+			if (VirtualGamepadState.menuPanel.charButton.isHeld && VirtualGamepadState.menuPanel.charButton.didStateChange) {
 				*action = GameAction(GameActionType_TOGGLE_CHARACTER_INFO);
-			return true;
-		}
-		if (VirtualGamepadState.healthButton.isHeld && VirtualGamepadState.healthButton.didStateChange) {
-			if (!QuestLogIsOpen && !sbookflag && stextflag == STORE_NONE)
-				*action = GameAction(GameActionType_USE_HEALTH_POTION);
-			return true;
-		}
-		if (VirtualGamepadState.manaButton.isHeld && VirtualGamepadState.manaButton.didStateChange) {
-			if (!QuestLogIsOpen && !sbookflag && stextflag == STORE_NONE)
-				*action = GameAction(GameActionType_USE_MANA_POTION);
-			return true;
+				return true;
+			}
+			if (VirtualGamepadState.menuPanel.questsButton.isHeld && VirtualGamepadState.menuPanel.questsButton.didStateChange) {
+				*action = GameAction(GameActionType_TOGGLE_QUEST_LOG);
+				return true;
+			}
+			if (VirtualGamepadState.menuPanel.inventoryButton.isHeld && VirtualGamepadState.menuPanel.inventoryButton.didStateChange) {
+				*action = GameAction(GameActionType_TOGGLE_INVENTORY);
+				return true;
+			}
+			if (VirtualGamepadState.menuPanel.mapButton.isHeld && VirtualGamepadState.menuPanel.mapButton.didStateChange) {
+				*action = GameActionSendKey { SDLK_TAB, false };
+				return true;
+			}
+			if (VirtualGamepadState.primaryActionButton.isHeld && VirtualGamepadState.primaryActionButton.didStateChange) {
+				if (!inGameMenu && !QuestLogIsOpen && !sbookflag) {
+					*action = GameAction(GameActionType_PRIMARY_ACTION);
+					if (ControllerButtonHeld == ControllerButton_NONE) {
+						ControllerButtonHeld = ControllerButtonPrimary;
+					}
+				} else if (sgpCurrentMenu != nullptr || stextflag != STORE_NONE || QuestLogIsOpen) {
+					*action = GameActionSendKey { SDLK_RETURN, false };
+				} else {
+					*action = GameActionSendKey { SDLK_SPACE, false };
+				}
+				return true;
+			}
+			if (VirtualGamepadState.secondaryActionButton.isHeld && VirtualGamepadState.secondaryActionButton.didStateChange) {
+				if (!inGameMenu && !QuestLogIsOpen && !sbookflag) {
+					*action = GameAction(GameActionType_SECONDARY_ACTION);
+					if (ControllerButtonHeld == ControllerButton_NONE)
+						ControllerButtonHeld = ControllerButtonSecondary;
+				}
+				return true;
+			}
+			if (VirtualGamepadState.spellActionButton.isHeld && VirtualGamepadState.spellActionButton.didStateChange) {
+				if (!inGameMenu && !QuestLogIsOpen && !sbookflag) {
+					*action = GameAction(GameActionType_CAST_SPELL);
+					if (ControllerButtonHeld == ControllerButton_NONE)
+						ControllerButtonHeld = ControllerButtonTertiary;
+				}
+				return true;
+			}
+			if (VirtualGamepadState.cancelButton.isHeld && VirtualGamepadState.cancelButton.didStateChange) {
+				if (inGameMenu || DoomFlag || spselflag)
+					*action = GameActionSendKey { SDLK_ESCAPE, false };
+				else if (invflag)
+					*action = GameAction(GameActionType_TOGGLE_INVENTORY);
+				else if (sbookflag)
+					*action = GameAction(GameActionType_TOGGLE_SPELL_BOOK);
+				else if (QuestLogIsOpen)
+					*action = GameAction(GameActionType_TOGGLE_QUEST_LOG);
+				else if (chrflag)
+					*action = GameAction(GameActionType_TOGGLE_CHARACTER_INFO);
+				return true;
+			}
+			if (VirtualGamepadState.healthButton.isHeld && VirtualGamepadState.healthButton.didStateChange) {
+				if (!QuestLogIsOpen && !sbookflag && stextflag == STORE_NONE)
+					*action = GameAction(GameActionType_USE_HEALTH_POTION);
+				return true;
+			}
+			if (VirtualGamepadState.manaButton.isHeld && VirtualGamepadState.manaButton.didStateChange) {
+				if (!QuestLogIsOpen && !sbookflag && stextflag == STORE_NONE)
+					*action = GameAction(GameActionType_USE_MANA_POTION);
+				return true;
+			}
+		} else if (event.type == SDL_FINGERUP) {
+			if ((!VirtualGamepadState.primaryActionButton.isHeld && ControllerButtonHeld == ControllerButtonPrimary)
+			    || (!VirtualGamepadState.secondaryActionButton.isHeld && ControllerButtonHeld == ControllerButtonSecondary)
+			    || (!VirtualGamepadState.spellActionButton.isHeld && ControllerButtonHeld == ControllerButtonTertiary)) {
+				ControllerButtonHeld = ControllerButton_NONE;
+				LastMouseButtonAction = MouseActionType::None;
+			}
 		}
 	}
 #endif
+	if (IsStashOpen && ctrlEvent.button == ControllerButton_BUTTON_BACK) {
+		StartGoldWithdraw();
+		return false;
+	}
 
 	if (HandleStartAndSelect(ctrlEvent, action))
 		return true;
@@ -169,16 +199,16 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 	case ControllerButton_BUTTON_LEFTSTICK:
 		if (select_modifier_active) {
 			if (!IsAutomapActive())
-				*action = GameActionSendMouseClick { GameActionSendMouseClick::LEFT, ctrlEvent.up };
+				*action = GameActionSendKey { SDL_BUTTON_LEFT | KeymapperMouseButtonMask, ctrlEvent.up };
 			return true;
 		}
 		break;
 	case ControllerButton_BUTTON_RIGHTSTICK:
 		if (!IsAutomapActive()) {
 			if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-				*action = GameActionSendMouseClick { GameActionSendMouseClick::RIGHT, ctrlEvent.up };
+				*action = GameActionSendKey { SDL_BUTTON_RIGHT | KeymapperMouseButtonMask, ctrlEvent.up };
 			else
-				*action = GameActionSendMouseClick { GameActionSendMouseClick::LEFT, ctrlEvent.up };
+				*action = GameActionSendKey { SDL_BUTTON_LEFT | KeymapperMouseButtonMask, ctrlEvent.up };
 		}
 		return true;
 	default:
@@ -190,14 +220,14 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 		case ControllerButton_BUTTON_LEFTSHOULDER:
 			if ((select_modifier_active && !sgOptions.Controller.bSwapShoulderButtonMode) || (sgOptions.Controller.bSwapShoulderButtonMode && !select_modifier_active)) {
 				if (!IsAutomapActive())
-					*action = GameActionSendMouseClick { GameActionSendMouseClick::LEFT, ctrlEvent.up };
+					*action = GameActionSendKey { SDL_BUTTON_LEFT | KeymapperMouseButtonMask, ctrlEvent.up };
 				return true;
 			}
 			break;
 		case ControllerButton_BUTTON_RIGHTSHOULDER:
 			if ((select_modifier_active && !sgOptions.Controller.bSwapShoulderButtonMode) || (sgOptions.Controller.bSwapShoulderButtonMode && !select_modifier_active)) {
 				if (!IsAutomapActive())
-					*action = GameActionSendMouseClick { GameActionSendMouseClick::RIGHT, ctrlEvent.up };
+					*action = GameActionSendKey { SDL_BUTTON_RIGHT | KeymapperMouseButtonMask, ctrlEvent.up };
 				return true;
 			}
 			break;
@@ -228,25 +258,25 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 			switch (ctrlEvent.button) {
 			case ControllerButton_BUTTON_DPAD_UP:
 				if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-					*action = GameActionSendKey { DVL_VK_F6, ctrlEvent.up };
+					*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell2"), ctrlEvent.up };
 				else
-					*action = GameActionSendKey { DVL_VK_ESCAPE, ctrlEvent.up };
+					*action = GameActionSendKey { SDLK_ESCAPE, ctrlEvent.up };
 				return true;
 			case ControllerButton_BUTTON_DPAD_RIGHT:
 				if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-					*action = GameActionSendKey { DVL_VK_F8, ctrlEvent.up };
+					*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell4"), ctrlEvent.up };
 				else if (!ctrlEvent.up)
 					*action = GameAction(GameActionType_TOGGLE_INVENTORY);
 				return true;
 			case ControllerButton_BUTTON_DPAD_DOWN:
 				if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-					*action = GameActionSendKey { DVL_VK_F7, ctrlEvent.up };
+					*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell3"), ctrlEvent.up };
 				else
-					*action = GameActionSendKey { DVL_VK_TAB, ctrlEvent.up };
+					*action = GameActionSendKey { SDLK_TAB, ctrlEvent.up };
 				return true;
 			case ControllerButton_BUTTON_DPAD_LEFT:
 				if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-					*action = GameActionSendKey { DVL_VK_F5, ctrlEvent.up };
+					*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell1"), ctrlEvent.up };
 				else if (!ctrlEvent.up)
 					*action = GameAction(GameActionType_TOGGLE_CHARACTER_INFO);
 				return true;
@@ -257,14 +287,14 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 		if (start_modifier_active) {
 			switch (ctrlEvent.button) {
 			case ControllerButton_BUTTON_DPAD_UP:
-				*action = GameActionSendKey { DVL_VK_ESCAPE, ctrlEvent.up };
+				*action = GameActionSendKey { SDLK_ESCAPE, ctrlEvent.up };
 				return true;
 			case ControllerButton_BUTTON_DPAD_RIGHT:
 				if (!ctrlEvent.up)
 					*action = GameAction(GameActionType_TOGGLE_INVENTORY);
 				return true;
 			case ControllerButton_BUTTON_DPAD_DOWN:
-				*action = GameActionSendKey { DVL_VK_TAB, ctrlEvent.up };
+				*action = GameActionSendKey { SDLK_TAB, ctrlEvent.up };
 				return true;
 			case ControllerButton_BUTTON_DPAD_LEFT:
 				if (!ctrlEvent.up)
@@ -273,11 +303,11 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 			case ControllerButton_BUTTON_Y: // Top button
 #ifdef __3DS__
 				if (!ctrlEvent.up) {
-					zoomflag = !zoomflag;
+					sgOptions.Graphics.zoom.SetValue(!*sgOptions.Graphics.zoom);
 					CalcViewportGeometry();
 				}
 #else
-			    // Not mapped. Reserved for future use.
+				/* Not mapped. Reserved for future use. */
 #endif
 				return true;
 			case ControllerButton_BUTTON_B: // Right button
@@ -309,9 +339,9 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 			if (ctrlEvent.up)
 				return true;
 			if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-				*action = GameActionSendKey { DVL_VK_F7, ctrlEvent.up };
+				*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell3"), ctrlEvent.up };
 			else if (DoomFlag)
-				*action = GameActionSendKey { DVL_VK_ESCAPE, ctrlEvent.up };
+				*action = GameActionSendKey { SDLK_ESCAPE, ctrlEvent.up };
 			else if (invflag)
 				*action = GameAction(GameActionType_TOGGLE_INVENTORY);
 			else if (sbookflag)
@@ -332,7 +362,7 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 			case ControllerButton_BUTTON_B: // Right button
 				if (!ctrlEvent.up) {
 					if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-						*action = GameActionSendKey { DVL_VK_F8, ctrlEvent.up };
+						*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell4"), ctrlEvent.up };
 					else
 						*action = GameAction(GameActionType_PRIMARY_ACTION);
 				}
@@ -340,7 +370,7 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 			case ControllerButton_BUTTON_Y: // Top button
 				if (!ctrlEvent.up) {
 					if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-						*action = GameActionSendKey { DVL_VK_F6, ctrlEvent.up };
+						*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell2"), ctrlEvent.up };
 					else
 						*action = GameAction(GameActionType_SECONDARY_ACTION);
 				}
@@ -348,7 +378,7 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 			case ControllerButton_BUTTON_X: // Left button
 				if (!ctrlEvent.up) {
 					if (IsControllerButtonPressed(ControllerButton_BUTTON_BACK))
-						*action = GameActionSendKey { DVL_VK_F5, ctrlEvent.up };
+						*action = GameActionSendKey { sgOptions.Keymapper.KeyForAction("QuickSpell1"), ctrlEvent.up };
 					else
 						*action = GameAction(GameActionType_CAST_SPELL);
 				}
@@ -392,7 +422,7 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 
 	// By default, map to a keyboard key.
 	if (ctrlEvent.button != ControllerButton_NONE) {
-		*action = GameActionSendKey { TranslateControllerButtonToKey(ctrlEvent.button),
+		*action = GameActionSendKey { static_cast<uint32_t>(TranslateControllerButtonToKey(ctrlEvent.button)),
 			ctrlEvent.up };
 		return true;
 	}
@@ -410,6 +440,20 @@ bool GetGameAction(const SDL_Event &event, ControllerButtonEvent ctrlEvent, Game
 #endif
 
 	return false;
+}
+
+bool IsSimulatedMouseClickBinding(ControllerButtonEvent ctrlEvent)
+{
+	switch (ctrlEvent.button) {
+	case ControllerButton_BUTTON_LEFTSTICK:
+	case ControllerButton_BUTTON_LEFTSHOULDER:
+	case ControllerButton_BUTTON_RIGHTSHOULDER:
+		return select_modifier_active;
+	case ControllerButton_BUTTON_RIGHTSTICK:
+		return true;
+	default:
+		return false;
+	}
 }
 
 AxisDirection GetMoveDirection()

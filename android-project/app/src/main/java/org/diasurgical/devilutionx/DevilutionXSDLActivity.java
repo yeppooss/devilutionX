@@ -26,6 +26,7 @@ import java.util.Objects;
 
 public class DevilutionXSDLActivity extends SDLActivity {
 	private String externalDir;
+	private boolean noExit;
 
 	protected void onCreate(Bundle savedInstanceState) {
 		// windowSoftInputMode=adjustPan stopped working
@@ -49,7 +50,20 @@ public class DevilutionXSDLActivity extends SDLActivity {
 		if (missingGameData()) {
 			Intent intent = new Intent(this, DataActivity.class);
 			startActivity(intent);
+			noExit = true;
 			this.finish();
+		}
+	}
+
+	/**
+	 * When the user exits the game, use System.exit(0)
+	 * to clear memory and prevent errors on restart
+	 */
+	protected void onDestroy() {
+		super.onDestroy();
+
+		if (!noExit) {
+			System.exit(0);
 		}
 	}
 
@@ -74,6 +88,12 @@ public class DevilutionXSDLActivity extends SDLActivity {
 		if (lang.startsWith("pl")) {
 			File pl_mpq = new File(externalDir + "/pl.mpq");
 			if (!pl_mpq.exists()) {
+				return true;
+			}
+		}
+		if (lang.startsWith("ru")) {
+			File ru_mpq = new File(externalDir + "/ru.mpq");
+			if (!ru_mpq.exists()) {
 				return true;
 			}
 		}
@@ -140,7 +160,10 @@ public class DevilutionXSDLActivity extends SDLActivity {
 	}
 
 	private void migrateSaveGames() {
-		for (File internalFile : Objects.requireNonNull(getFilesDir().listFiles())) {
+		File[] files = getFilesDir().listFiles();
+		if (files == null)
+			return;
+		for (File internalFile : files) {
 			migrateFile(internalFile);
 		}
 	}
@@ -178,7 +201,6 @@ public class DevilutionXSDLActivity extends SDLActivity {
 
 	protected String[] getLibraries() {
 		return new String[]{
-				"SDL2",
 				"devilutionx"
 		};
 	}

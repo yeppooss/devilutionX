@@ -5,12 +5,14 @@
  */
 #pragma once
 
+#include "mpq/mpq_writer.hpp"
 #include "player.h"
+#include "utils/attributes.h"
 
 namespace devilution {
 
-extern bool gbIsHellfireSaveGame;
-extern uint8_t giNumberOfLevels;
+extern DVL_API_FOR_TEST bool gbIsHellfireSaveGame;
+extern DVL_API_FOR_TEST uint8_t giNumberOfLevels;
 
 void RemoveInvalidItem(Item &pItem);
 _item_indexes RemapItemIdxFromDiablo(_item_indexes i);
@@ -22,7 +24,7 @@ void LoadHotkeys();
 void LoadHeroItems(Player &player);
 /**
  * @brief Remove invalid inventory items from the inventory grid
- * @param pnum The id of the player
+ * @param player The player to remove invalid items from
  */
 void RemoveEmptyInventory(Player &player);
 
@@ -31,11 +33,14 @@ void RemoveEmptyInventory(Player &player);
  * @param firstflag Can be set to false if we are simply reloading the current game
  */
 void LoadGame(bool firstflag);
-void SaveHotkeys();
-void SaveHeroItems(Player &player);
-void SaveGameData();
+void SaveHotkeys(MpqWriter &saveWriter, const Player &player);
+void SaveHeroItems(MpqWriter &saveWriter, Player &player);
+void SaveGameData(MpqWriter &saveWriter);
 void SaveGame();
-void SaveLevel();
+void SaveLevel(MpqWriter &saveWriter);
 void LoadLevel();
+void ConvertLevels(MpqWriter &saveWriter);
+void LoadStash();
+void SaveStash(MpqWriter &stashWriter);
 
 } // namespace devilution

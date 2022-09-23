@@ -1,33 +1,68 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 
 #include <SDL_version.h>
 
+#include "engine/sound_defs.hpp"
+#include "miniwin/misc_msg.h"
 #include "pack.h"
 #include "utils/enum_traits.h"
+#include "utils/stdcompat/optional.hpp"
 #include "utils/stdcompat/string_view.hpp"
 
 namespace devilution {
 
-enum class StartUpGameOption {
-	None,
-	Hellfire,
-	Diablo,
+enum class StartUpGameMode : uint8_t {
+	/** @brief If hellfire is present, asks the user what game they want to start. */
+	Ask = 0,
+	Hellfire = 1,
+	Diablo = 2,
 };
 
-enum class ScalingQuality {
+enum class StartUpIntro : uint8_t {
+	Off = 0,
+	Once = 1,
+	On = 2,
+};
+
+/** @brief Defines what splash screen should be shown at startup. */
+enum class StartUpSplash : uint8_t {
+	/** @brief Show no splash screen. */
+	None = 0,
+	/** @brief Show only TitleDialog. */
+	TitleDialog = 1,
+	/** @brief Show Logo and TitleDialog. */
+	LogoAndTitleDialog = 2,
+};
+
+enum class ScalingQuality : uint8_t {
 	NearestPixel,
 	BilinearFiltering,
 	AnisotropicFiltering,
 };
 
-enum class OptionEntryType {
-	Boolean,
-	List,
+enum class Resampler : uint8_t {
+#ifdef DEVILUTIONX_RESAMPLER_SPEEX
+	Speex = 0,
+#endif
+#ifdef DVL_AULIB_SUPPORTS_SDL_RESAMPLER
+	SDL,
+#endif
 };
 
-enum class OptionEntryFlags {
+string_view ResamplerToString(Resampler resampler);
+std::optional<Resampler> ResamplerFromString(string_view resampler);
+
+enum class OptionEntryType : uint8_t {
+	Boolean,
+	List,
+	Key,
+};
+
+enum class OptionEntryFlags : uint8_t {
 	/** @brief No special logic. */
 	None = 0,
 	/** @brief Shouldn't be shown in settings dialog. */
@@ -40,19 +75,25 @@ enum class OptionEntryFlags {
 	OnlyHellfire = 1 << 3,
 	/** @brief Option is only relevant for Diablo. */
 	OnlyDiablo = 1 << 4,
+	/** @brief After option is changed the UI needs to be recreated. */
+	RecreateUI = 1 << 5,
+	/** @brief diablo.mpq must be present. */
+	NeedDiabloMpq = 1 << 6,
+	/** @brief hellfire.mpq must be present. */
+	NeedHellfireMpq = 1 << 7,
 };
 use_enum_as_flags(OptionEntryFlags);
 
 class OptionEntryBase {
 public:
-	OptionEntryBase(string_view key, OptionEntryFlags flags, string_view name, string_view description)
-	    : key(key)
-	    , flags(flags)
+	OptionEntryBase(string_view key, OptionEntryFlags flags, const char *name, const char *description)
+	    : flags(flags)
+	    , key(key)
 	    , name(name)
 	    , description(description)
 	{
 	}
-	[[nodiscard]] string_view GetName() const;
+	[[nodiscard]] virtual string_view GetName() const;
 	[[nodiscard]] string_view GetDescription() const;
 	[[nodiscard]] virtual OptionEntryType GetType() const = 0;
 	[[nodiscard]] OptionEntryFlags GetFlags() const;
@@ -63,11 +104,12 @@ public:
 	virtual void LoadFromIni(string_view category) = 0;
 	virtual void SaveToIni(string_view category) const = 0;
 
+	OptionEntryFlags flags;
+
 protected:
 	string_view key;
-	string_view name;
-	string_view description;
-	OptionEntryFlags flags;
+	const char *name;
+	const char *description;
 	void NotifyValueChanged();
 
 private:
@@ -76,13 +118,16 @@ private:
 
 class OptionEntryBoolean : public OptionEntryBase {
 public:
-	OptionEntryBoolean(string_view key, OptionEntryFlags flags, string_view name, string_view description, bool defaultValue)
+	OptionEntryBoolean(string_view key, OptionEntryFlags flags, const char *name, const char *description, bool defaultValue)
 	    : OptionEntryBase(key, flags, name, description)
 	    , defaultValue(defaultValue)
 	    , value(defaultValue)
 	{
 	}
-	[[nodiscard]] bool operator*() const;
+	[[nodiscard]] bool operator*() const
+	{
+		return value;
+	}
 	void SetValue(bool value);
 
 	[[nodiscard]] OptionEntryType GetType() const override;
@@ -91,8 +136,8 @@ public:
 	void SaveToIni(string_view category) const override;
 
 private:
-	bool value;
 	bool defaultValue;
+	bool value;
 };
 
 class OptionEntryListBase : public OptionEntryBase {
@@ -106,7 +151,7 @@ public:
 	[[nodiscard]] string_view GetValueDescription() const override;
 
 protected:
-	OptionEntryListBase(string_view key, OptionEntryFlags flags, string_view name, string_view description)
+	OptionEntryListBase(string_view key, OptionEntryFlags flags, const char *name, const char *description)
 	    : OptionEntryBase(key, flags, name, description)
 	{
 	}
@@ -117,26 +162,30 @@ public:
 	void LoadFromIni(string_view category) override;
 	void SaveToIni(string_view category) const override;
 
-	[[nodiscard]] virtual size_t GetListSize() const override;
-	[[nodiscard]] virtual string_view GetListDescription(size_t index) const override;
+	[[nodiscard]] size_t GetListSize() const override;
+	[[nodiscard]] string_view GetListDescription(size_t index) const override;
 	[[nodiscard]] size_t GetActiveListIndex() const override;
 	void SetActiveListIndex(size_t index) override;
 
 protected:
-	OptionEntryEnumBase(string_view key, OptionEntryFlags flags, string_view name, string_view description, int defaultValue)
+	OptionEntryEnumBase(string_view key, OptionEntryFlags flags, const char *name, const char *description, int defaultValue)
 	    : OptionEntryListBase(key, flags, name, description)
 	    , defaultValue(defaultValue)
 	    , value(defaultValue)
 	{
 	}
 
-	[[nodiscard]] int GetValueInternal() const;
+	[[nodiscard]] int GetValueInternal() const
+	{
+		return value;
+	}
+	void SetValueInternal(int value);
 
 	void AddEntry(int value, string_view name);
 
 private:
-	int value;
 	int defaultValue;
+	int value;
 	std::vector<string_view> entryNames;
 	std::vector<int> entryValues;
 };
@@ -144,7 +193,7 @@ private:
 template <typename T>
 class OptionEntryEnum : public OptionEntryEnumBase {
 public:
-	OptionEntryEnum(string_view key, OptionEntryFlags flags, string_view name, string_view description, T defaultValue, std::initializer_list<std::pair<T, string_view>> entries)
+	OptionEntryEnum(string_view key, OptionEntryFlags flags, const char *name, const char *description, T defaultValue, std::initializer_list<std::pair<T, string_view>> entries)
 	    : OptionEntryEnumBase(key, flags, name, description, static_cast<int>(defaultValue))
 	{
 		for (auto entry : entries) {
@@ -155,10 +204,185 @@ public:
 	{
 		return static_cast<T>(GetValueInternal());
 	}
+	void SetValue(T value)
+	{
+		SetValueInternal(static_cast<int>(value));
+	}
+};
+
+class OptionEntryIntBase : public OptionEntryListBase {
+public:
+	void LoadFromIni(string_view category) override;
+	void SaveToIni(string_view category) const override;
+
+	[[nodiscard]] size_t GetListSize() const override;
+	[[nodiscard]] string_view GetListDescription(size_t index) const override;
+	[[nodiscard]] size_t GetActiveListIndex() const override;
+	void SetActiveListIndex(size_t index) override;
+
+protected:
+	OptionEntryIntBase(string_view key, OptionEntryFlags flags, const char *name, const char *description, int defaultValue)
+	    : OptionEntryListBase(key, flags, name, description)
+	    , defaultValue(defaultValue)
+	    , value(defaultValue)
+	{
+	}
+
+	[[nodiscard]] int GetValueInternal() const
+	{
+		return value;
+	}
+	void SetValueInternal(int value);
+
+	void AddEntry(int value);
+
+private:
+	int defaultValue;
+	int value;
+	mutable std::vector<std::string> entryNames;
+	std::vector<int> entryValues;
+};
+
+template <typename T>
+class OptionEntryInt : public OptionEntryIntBase {
+public:
+	OptionEntryInt(string_view key, OptionEntryFlags flags, const char *name, const char *description, T defaultValue, std::initializer_list<T> entries)
+	    : OptionEntryIntBase(key, flags, name, description, static_cast<int>(defaultValue))
+	{
+		for (auto entry : entries) {
+			AddEntry(static_cast<int>(entry));
+		}
+	}
+	OptionEntryInt(string_view key, OptionEntryFlags flags, const char *name, const char *description, T defaultValue)
+	    : OptionEntryInt(key, flags, name, description, defaultValue, { defaultValue })
+	{
+	}
+	[[nodiscard]] T operator*() const
+	{
+		return static_cast<T>(GetValueInternal());
+	}
+	void SetValue(T value)
+	{
+		SetValueInternal(static_cast<int>(value));
+	}
+};
+
+class OptionEntryLanguageCode : public OptionEntryListBase {
+public:
+	OptionEntryLanguageCode();
+
+	void LoadFromIni(string_view category) override;
+	void SaveToIni(string_view category) const override;
+
+	[[nodiscard]] size_t GetListSize() const override;
+	[[nodiscard]] string_view GetListDescription(size_t index) const override;
+	[[nodiscard]] size_t GetActiveListIndex() const override;
+	void SetActiveListIndex(size_t index) override;
+
+	string_view operator*() const
+	{
+		return szCode;
+	}
+
+	OptionEntryLanguageCode &operator=(string_view code)
+	{
+		assert(code.size() < 6);
+		memcpy(szCode, code.data(), code.size());
+		szCode[code.size()] = '\0';
+		return *this;
+	}
+
+private:
+	/** @brief Language code (ISO-15897) for text. */
+	char szCode[6];
+	mutable std::vector<std::pair<std::string, std::string>> languages;
+
+	void CheckLanguagesAreInitialized() const;
+};
+
+class OptionEntryResolution : public OptionEntryListBase {
+public:
+	OptionEntryResolution();
+
+	void LoadFromIni(string_view category) override;
+	void SaveToIni(string_view category) const override;
+
+	[[nodiscard]] size_t GetListSize() const override;
+	[[nodiscard]] string_view GetListDescription(size_t index) const override;
+	[[nodiscard]] size_t GetActiveListIndex() const override;
+	void SetActiveListIndex(size_t index) override;
+
+	Size operator*() const
+	{
+		return size;
+	}
+
+private:
+	/** @brief View size. */
+	Size size;
+	mutable std::vector<std::pair<Size, std::string>> resolutions;
+
+	void CheckResolutionsAreInitialized() const;
+};
+
+class OptionEntryResampler : public OptionEntryListBase {
+public:
+	OptionEntryResampler();
+
+	void LoadFromIni(string_view category) override;
+	void SaveToIni(string_view category) const override;
+
+	[[nodiscard]] size_t GetListSize() const override;
+	[[nodiscard]] string_view GetListDescription(size_t index) const override;
+	[[nodiscard]] size_t GetActiveListIndex() const override;
+	void SetActiveListIndex(size_t index) override;
+
+	Resampler operator*() const
+	{
+		return resampler_;
+	}
+
+private:
+	void UpdateDependentOptions() const;
+
+	Resampler resampler_;
+};
+
+class OptionEntryAudioDevice : public OptionEntryListBase {
+public:
+	OptionEntryAudioDevice();
+
+	void LoadFromIni(string_view category) override;
+	void SaveToIni(string_view category) const override;
+
+	[[nodiscard]] size_t GetListSize() const override;
+	[[nodiscard]] string_view GetListDescription(size_t index) const override;
+	[[nodiscard]] size_t GetActiveListIndex() const override;
+	void SetActiveListIndex(size_t index) override;
+
+	std::string operator*() const
+	{
+		for (size_t i = 0; i < GetListSize(); i++) {
+			string_view deviceName = GetDeviceName(i);
+			if (deviceName == deviceName_)
+				return deviceName_;
+		}
+		return "";
+	}
+
+private:
+	string_view GetDeviceName(size_t index) const;
+
+	std::string deviceName_;
 };
 
 struct OptionCategoryBase {
-	OptionCategoryBase(string_view key, string_view name, string_view description);
+	OptionCategoryBase(string_view key, const char *name, const char *description)
+	    : key(key)
+	    , name(name)
+	    , description(description)
+	{
+	}
 
 	[[nodiscard]] string_view GetKey() const;
 	[[nodiscard]] string_view GetName() const;
@@ -168,36 +392,43 @@ struct OptionCategoryBase {
 
 protected:
 	string_view key;
-	string_view name;
-	string_view description;
+	const char *name;
+	const char *description;
+};
+
+struct StartUpOptions : OptionCategoryBase {
+	StartUpOptions();
+	std::vector<OptionEntryBase *> GetEntries() override;
+
+	OptionEntryEnum<StartUpGameMode> gameMode;
+	OptionEntryBoolean shareware;
+	/** @brief Play game intro video on diablo startup. */
+	OptionEntryEnum<StartUpIntro> diabloIntro;
+	/** @brief Play game intro video on hellfire startup. */
+	OptionEntryEnum<StartUpIntro> hellfireIntro;
+	OptionEntryEnum<StartUpSplash> splash;
 };
 
 struct DiabloOptions : OptionCategoryBase {
 	DiabloOptions();
 	std::vector<OptionEntryBase *> GetEntries() override;
 
-	/** @brief Play game intro video on startup. */
-	OptionEntryBoolean intro;
 	/** @brief Remembers what singleplayer hero/save was last used. */
-	std::uint32_t lastSinglePlayerHero;
+	OptionEntryInt<std::uint32_t> lastSinglePlayerHero;
 	/** @brief Remembers what multiplayer hero/save was last used. */
-	std::uint32_t lastMultiplayerHero;
+	OptionEntryInt<std::uint32_t> lastMultiplayerHero;
 };
 
 struct HellfireOptions : OptionCategoryBase {
 	HellfireOptions();
 	std::vector<OptionEntryBase *> GetEntries() override;
 
-	/** @brief Play game intro video on startup. */
-	OptionEntryBoolean intro;
 	/** @brief Cornerstone of the world item. */
 	char szItem[sizeof(ItemPack) * 2 + 1];
 	/** @brief Remembers what singleplayer hero/save was last used. */
-	std::uint32_t lastSinglePlayerHero;
+	OptionEntryInt<std::uint32_t> lastSinglePlayerHero;
 	/** @brief Remembers what multiplayer hero/save was last used. */
-	std::uint32_t lastMultiplayerHero;
-
-	StartUpGameOption startUpGameOption;
+	OptionEntryInt<std::uint32_t> lastMultiplayerHero;
 };
 
 struct AudioOptions : OptionCategoryBase {
@@ -205,9 +436,9 @@ struct AudioOptions : OptionCategoryBase {
 	std::vector<OptionEntryBase *> GetEntries() override;
 
 	/** @brief Movie and SFX volume. */
-	int nSoundVolume;
+	OptionEntryInt<int> soundVolume;
 	/** @brief Music volume. */
-	int nMusicVolume;
+	OptionEntryInt<int> musicVolume;
 	/** @brief Player emits sound when walking. */
 	OptionEntryBoolean walkingSound;
 	/** @brief Automatically equipping items on pickup emits the equipment sound. */
@@ -215,54 +446,65 @@ struct AudioOptions : OptionCategoryBase {
 	/** @brief Picking up items emits the items pickup sound. */
 	OptionEntryBoolean itemPickupSound;
 
-	/** @brief Output sample rate (Hz) */
-	std::uint32_t nSampleRate;
+	/** @brief Output sample rate (Hz). */
+	OptionEntryInt<std::uint32_t> sampleRate;
 	/** @brief The number of output channels (1 or 2) */
-	std::uint8_t nChannels;
+	OptionEntryInt<std::uint8_t> channels;
 	/** @brief Buffer size (number of frames per channel) */
-	std::uint32_t nBufferSize;
-	/** @brief Quality of the resampler, from 0 (lowest) to 10 (highest) */
-	std::uint8_t nResamplingQuality;
+	OptionEntryInt<std::uint32_t> bufferSize;
+	/** @brief Resampler implementation. */
+	OptionEntryResampler resampler;
+	/** @brief Quality of the resampler, from 0 (lowest) to 10 (highest). Available for the speex resampler only. */
+	OptionEntryInt<std::uint8_t> resamplingQuality;
+	/** @brief Audio device. */
+	OptionEntryAudioDevice device;
 };
 
 struct GraphicsOptions : OptionCategoryBase {
 	GraphicsOptions();
 	std::vector<OptionEntryBase *> GetEntries() override;
 
-	/** @brief Render width. */
-	int nWidth;
-	/** @brief Render height. */
-	int nHeight;
+	OptionEntryResolution resolution;
 	/** @brief Run in fullscreen or windowed mode. */
-	bool bFullscreen;
-	/** @brief Scale the image after rendering. */
-	bool bUpscale;
+	OptionEntryBoolean fullscreen;
+#if !defined(USE_SDL1) || defined(__3DS__)
 	/** @brief Expand the aspect ratio to match the screen. */
-	bool bFitToScreen;
+	OptionEntryBoolean fitToScreen;
+#endif
+#ifndef USE_SDL1
+	/** @brief Scale the image after rendering. */
+	OptionEntryBoolean upscale;
 	/** @brief See SDL_HINT_RENDER_SCALE_QUALITY. */
 	OptionEntryEnum<ScalingQuality> scaleQuality;
 	/** @brief Only scale by values divisible by the width and height. */
-	bool bIntegerScaling;
+	OptionEntryBoolean integerScaling;
 	/** @brief Enable vsync on the output. */
-	bool bVSync;
-	/** @brief Use blended transparency rather than stippled. */
-	bool bBlendedTransparancy;
+	OptionEntryBoolean vSync;
+#endif
 	/** @brief Gamma correction level. */
-	int nGammaCorrection;
+	OptionEntryInt<int> gammaCorrection;
+	/** @brief Zoom on start. */
+	OptionEntryBoolean zoom;
 	/** @brief Enable color cycling animations. */
-	bool bColorCycling;
+	OptionEntryBoolean colorCycling;
+	/** @brief Use alternate nest palette. */
+	OptionEntryBoolean alternateNestArt;
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	/** @brief Use a hardware cursor (SDL2 only). */
-	bool bHardwareCursor;
+	OptionEntryBoolean hardwareCursor;
 	/** @brief Use a hardware cursor for items. */
-	bool bHardwareCursorForItems;
+	OptionEntryBoolean hardwareCursorForItems;
 	/** @brief Maximum width / height for the hardware cursor. Larger cursors fall back to software. */
-	int nHardwareCursorMaxSize;
+	OptionEntryInt<int> hardwareCursorMaxSize;
 #endif
-	/** @brief Enable FPS Limit. */
-	bool bFPSLimit;
+	/** @brief Enable FPS Limiter. */
+	OptionEntryBoolean limitFPS;
 	/** @brief Show FPS, even without the -f command line flag. */
-	bool bShowFPS;
+	OptionEntryBoolean showFPS;
+	/** @brief Display current/max health values on health globe. */
+	OptionEntryBoolean showHealthValues;
+	/** @brief Display current/max mana values on mana globe. */
+	OptionEntryBoolean showManaValues;
 };
 
 struct GameplayOptions : OptionCategoryBase {
@@ -270,7 +512,7 @@ struct GameplayOptions : OptionCategoryBase {
 	std::vector<OptionEntryBase *> GetEntries() override;
 
 	/** @brief Gameplay ticks per second. */
-	int nTickRate;
+	OptionEntryInt<int> tickRate;
 	/** @brief Enable double walk speed when in town. */
 	OptionEntryBoolean runInTown;
 	/** @brief Do not let the mouse leave the application window. */
@@ -288,29 +530,51 @@ struct GameplayOptions : OptionCategoryBase {
 	/** @brief Show the current level progress. */
 	OptionEntryBoolean experienceBar;
 	/** @brief Show enemy health at the top of the screen. */
-	bool bEnemyHealthBar;
+	OptionEntryBoolean enemyHealthBar;
 	/** @brief Automatically pick up gold when walking over it. */
-	bool bAutoGoldPickup;
+	OptionEntryBoolean autoGoldPickup;
+	/** @brief Auto-pickup elixirs */
+	OptionEntryBoolean autoElixirPickup;
+	/** @brief Auto-pickup oils */
+	OptionEntryBoolean autoOilPickup;
+	/** @brief Enable or Disable auto-pickup in town */
+	OptionEntryBoolean autoPickupInTown;
 	/** @brief Recover mana when talking to Adria. */
-	bool bAdriaRefillsMana;
+	OptionEntryBoolean adriaRefillsMana;
 	/** @brief Automatically attempt to equip weapon-type items when picking them up. */
-	bool bAutoEquipWeapons;
+	OptionEntryBoolean autoEquipWeapons;
 	/** @brief Automatically attempt to equip armor-type items when picking them up. */
-	bool bAutoEquipArmor;
+	OptionEntryBoolean autoEquipArmor;
 	/** @brief Automatically attempt to equip helm-type items when picking them up. */
-	bool bAutoEquipHelms;
+	OptionEntryBoolean autoEquipHelms;
 	/** @brief Automatically attempt to equip shield-type items when picking them up. */
-	bool bAutoEquipShields;
+	OptionEntryBoolean autoEquipShields;
 	/** @brief Automatically attempt to equip jewelry-type items when picking them up. */
-	bool bAutoEquipJewelry;
+	OptionEntryBoolean autoEquipJewelry;
 	/** @brief Only enable 2/3 quests in each game session */
-	bool bRandomizeQuests;
+	OptionEntryBoolean randomizeQuests;
 	/** @brief Indicates whether or not monster type (Animal, Demon, Undead) is shown along with other monster information. */
-	bool bShowMonsterType;
-	/** @brief Refill belt form inventory, or rather, use potions/scrolls from inventory first when belt item is consumed.  */
-	bool bAutoRefillBelt;
+	OptionEntryBoolean showMonsterType;
+	/** @brief Displays item labels for items on the ground.  */
+	OptionEntryBoolean showItemLabels;
+	/** @brief Refill belt from inventory, or rather, use potions/scrolls from inventory first when belt item is consumed.  */
+	OptionEntryBoolean autoRefillBelt;
 	/** @brief Locally disable clicking on shrines which permanently cripple character. */
-	bool bDisableCripplingShrines;
+	OptionEntryBoolean disableCripplingShrines;
+	/** @brief Spell hotkeys instantly cast the spell. */
+	OptionEntryBoolean quickCast;
+	/** @brief Number of Healing potions to pick up automatically */
+	OptionEntryInt<int> numHealPotionPickup;
+	/** @brief Number of Full Healing potions to pick up automatically */
+	OptionEntryInt<int> numFullHealPotionPickup;
+	/** @brief Number of Mana potions to pick up automatically */
+	OptionEntryInt<int> numManaPotionPickup;
+	/** @brief Number of Full Mana potions to pick up automatically */
+	OptionEntryInt<int> numFullManaPotionPickup;
+	/** @brief Number of Rejuvenating potions to pick up automatically */
+	OptionEntryInt<int> numRejuPotionPickup;
+	/** @brief Number of Full Rejuvenating potions to pick up automatically */
+	OptionEntryInt<int> numFullRejuPotionPickup;
 };
 
 struct ControllerOptions : OptionCategoryBase {
@@ -337,10 +601,12 @@ struct NetworkOptions : OptionCategoryBase {
 
 	/** @brief Optionally bind to a specific network interface. */
 	char szBindAddress[129];
+	/** @brief Most recently entered ZeroTier Game ID. */
+	char szPreviousZTGame[129];
 	/** @brief Most recently entered Hostname in join dialog. */
 	char szPreviousHost[129];
 	/** @brief What network port to use. */
-	uint16_t nPort;
+	OptionEntryInt<uint16_t> port;
 };
 
 struct ChatOptions : OptionCategoryBase {
@@ -348,18 +614,76 @@ struct ChatOptions : OptionCategoryBase {
 	std::vector<OptionEntryBase *> GetEntries() override;
 
 	/** @brief Quick chat messages. */
-	char szHotKeyMsgs[QUICK_MESSAGE_OPTIONS][MAX_SEND_STR_LEN];
+	std::vector<std::string> szHotKeyMsgs[QUICK_MESSAGE_OPTIONS];
 };
 
 struct LanguageOptions : OptionCategoryBase {
 	LanguageOptions();
 	std::vector<OptionEntryBase *> GetEntries() override;
 
-	/** @brief Language code (IETF) for text. */
-	char szCode[6];
+	OptionEntryLanguageCode code;
+};
+
+constexpr uint32_t KeymapperMouseButtonMask = 1 << 31;
+
+/** The Keymapper maps keys to actions. */
+struct KeymapperOptions : OptionCategoryBase {
+	/**
+	 * Action represents an action that can be triggered using a keyboard
+	 * shortcut.
+	 */
+	class Action final : public OptionEntryBase {
+	public:
+		[[nodiscard]] string_view GetName() const override;
+		[[nodiscard]] OptionEntryType GetType() const override
+		{
+			return OptionEntryType::Key;
+		}
+
+		void LoadFromIni(string_view category) override;
+		void SaveToIni(string_view category) const override;
+
+		[[nodiscard]] string_view GetValueDescription() const override;
+
+		bool SetValue(int value);
+
+	private:
+		Action(string_view key, const char *name, const char *description, uint32_t defaultKey, std::function<void()> actionPressed, std::function<void()> actionReleased, std::function<bool()> enable, unsigned index);
+		uint32_t defaultKey;
+		std::function<void()> actionPressed;
+		std::function<void()> actionReleased;
+		std::function<bool()> enable;
+		uint32_t boundKey = SDLK_UNKNOWN;
+		unsigned dynamicIndex;
+		std::string dynamicKey;
+		mutable std::string dynamicName;
+
+		friend struct KeymapperOptions;
+	};
+
+	KeymapperOptions();
+	std::vector<OptionEntryBase *> GetEntries() override;
+
+	void AddAction(
+	    string_view key, const char *name, const char *description, uint32_t defaultKey,
+	    std::function<void()> actionPressed,
+	    std::function<void()> actionReleased = nullptr,
+	    std::function<bool()> enable = nullptr,
+	    unsigned index = 0);
+	void KeyPressed(uint32_t key) const;
+	void KeyReleased(uint32_t key) const;
+	string_view KeyNameForAction(string_view actionName) const;
+	uint32_t KeyForAction(string_view actionName) const;
+
+private:
+	std::vector<std::unique_ptr<Action>> actions;
+	std::unordered_map<uint32_t, std::reference_wrapper<Action>> keyIDToAction;
+	std::unordered_map<uint32_t, std::string> keyIDToKeyName;
+	std::unordered_map<std::string, uint32_t> keyNameToKeyID;
 };
 
 struct Options {
+	StartUpOptions StartUp;
 	DiabloOptions Diablo;
 	HellfireOptions Hellfire;
 	AudioOptions Audio;
@@ -369,28 +693,29 @@ struct Options {
 	NetworkOptions Network;
 	ChatOptions Chat;
 	LanguageOptions Language;
+	KeymapperOptions Keymapper;
 
 	[[nodiscard]] std::vector<OptionCategoryBase *> GetCategories()
 	{
 		return {
+			&Language,
+			&StartUp,
+			&Graphics,
+			&Audio,
 			&Diablo,
 			&Hellfire,
-			&Audio,
 			&Gameplay,
-			&Graphics,
 			&Controller,
 			&Network,
 			&Chat,
-			&Language,
+			&Keymapper,
 		};
 	}
 };
 
-bool GetIniValue(const char *sectionName, const char *keyName, char *string, int stringSize, const char *defaultString = "");
-void SetIniValue(const char *sectionName, const char *keyName, const char *value, int len = 0);
+extern DVL_API_FOR_TEST Options sgOptions;
 
-extern Options sgOptions;
-extern bool sbWasOptionsLoaded;
+bool HardwareCursorSupported();
 
 /**
  * @brief Save game configurations to ini file

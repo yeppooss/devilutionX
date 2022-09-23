@@ -1,13 +1,13 @@
 #pragma once
 
-#include <string>
-#include <set>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <deque>
-#include <map>
 #include <exception>
-#include <array>
-#include <algorithm>
+#include <map>
+#include <set>
+#include <string>
 
 #include "dvlnet/frame_queue.h"
 
@@ -73,6 +73,7 @@ public:
 	bool recv(endpoint &peer, buffer_t &data);
 	bool get_disconnected(endpoint &peer);
 	bool network_online();
+	bool is_peer_connected(endpoint &peer);
 	static std::string make_default_gamename();
 
 private:

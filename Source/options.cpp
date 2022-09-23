@@ -6,32 +6,29 @@
 
 #include <cstdint>
 #include <fstream>
-#include <locale>
 
-#ifdef __ANDROID__
-#include "SDL.h"
-#include <jni.h>
-#endif
-
-#ifdef __vita__
-#include <psp2/apputil.h>
-#include <psp2/system_param.h>
-#endif
-
-#ifdef __3DS__
-#include "platform/ctr/locale.hpp"
-#endif
+#include <fmt/format.h>
 
 #define SI_SUPPORT_IOSTREAMS
+#define SI_NO_CONVERSION
 #include <SimpleIni.h>
 
-#include "diablo.h"
+#include "control.h"
+#include "discord/discord.h"
 #include "engine/demomode.h"
+#include "engine/sound_defs.hpp"
+#include "hwcursor.hpp"
 #include "options.h"
+#include "platform/locale.hpp"
+#include "qol/monhealthbar.h"
 #include "qol/xpbar.h"
+#include "utils/display.h"
 #include "utils/file_util.h"
 #include "utils/language.h"
+#include "utils/log.hpp"
 #include "utils/paths.h"
+#include "utils/stdcompat/algorithm.hpp"
+#include "utils/str_cat.hpp"
 #include "utils/utf8.hpp"
 
 namespace devilution {
@@ -52,16 +49,31 @@ namespace devilution {
 #define DEFAULT_AUDIO_BUFFER_SIZE 2048
 #endif
 #ifndef DEFAULT_AUDIO_RESAMPLING_QUALITY
-#define DEFAULT_AUDIO_RESAMPLING_QUALITY 5
-#endif
-
-#ifdef VIRTUAL_GAMEPAD
-#define AUTO_PICKUP_DEFAULT(bValue) true
-#else
-#define AUTO_PICKUP_DEFAULT(bValue) bValue
+#define DEFAULT_AUDIO_RESAMPLING_QUALITY 3
 #endif
 
 namespace {
+
+#if defined(__ANDROID__) || defined(__APPLE__)
+constexpr OptionEntryFlags OnlyIfNoImplicitRenderer = OptionEntryFlags::Invisible;
+#else
+constexpr OptionEntryFlags OnlyIfNoImplicitRenderer = OptionEntryFlags::None;
+#endif
+
+#if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE == 1)
+constexpr OptionEntryFlags OnlyIfSupportsWindowed = OptionEntryFlags::Invisible;
+#else
+constexpr OptionEntryFlags OnlyIfSupportsWindowed = OptionEntryFlags::None;
+#endif
+
+constexpr size_t NumResamplers =
+#ifdef DEVILUTIONX_RESAMPLER_SPEEX
+    1 +
+#endif
+#ifdef DVL_AULIB_SUPPORTS_SDL_RESAMPLER
+    1 +
+#endif
+    0;
 
 std::string GetIniPath()
 {
@@ -77,6 +89,7 @@ CSimpleIni &GetIni()
 		auto path = GetIniPath();
 		auto stream = CreateFileStream(path.c_str(), std::fstream::in | std::fstream::binary);
 		ini.SetSpaces(false);
+		ini.SetMultiKey();
 		if (stream)
 			ini.LoadData(*stream);
 		isIniLoaded = true;
@@ -95,27 +108,35 @@ public:
 	{
 		this->sectionName_ = sectionName;
 		this->keyName_ = keyName;
-		std::list<CSimpleIni::Entry> values;
-		if (!GetIni().GetAllValues(sectionName, keyName, values)) {
+		oldValue_ = GetValue();
+		if (!oldValue_) {
 			// No entry found in original ini => new entry => changed
 			IniChanged = true;
 		}
-		const auto *value = GetIni().GetValue(sectionName, keyName);
-		if (value != nullptr)
-			oldValue_ = value;
 	}
 	~IniChangedChecker()
 	{
-		const auto *value = GetIni().GetValue(sectionName_, keyName_);
-		std::string newValue;
-		if (value != nullptr)
-			newValue = value;
+		auto newValue = GetValue();
 		if (oldValue_ != newValue)
 			IniChanged = true;
 	}
 
 private:
-	std::string oldValue_;
+	std::optional<std::string> GetValue()
+	{
+		std::list<CSimpleIni::Entry> values;
+		if (!GetIni().GetAllValues(sectionName_, keyName_, values))
+			return std::nullopt;
+		std::string ret;
+		for (auto &entry : values) {
+			if (entry.pItem != nullptr)
+				ret.append(entry.pItem);
+			ret.append("\n");
+		}
+		return ret;
+	}
+
+	std::optional<std::string> oldValue_;
 	const char *sectionName_;
 	const char *keyName_;
 };
@@ -135,34 +156,74 @@ float GetIniFloat(const char *sectionName, const char *keyName, float defaultVal
 	return (float)GetIni().GetDoubleValue(sectionName, keyName, defaultValue);
 }
 
+bool GetIniValue(string_view sectionName, string_view keyName, char *string, int stringSize, const char *defaultString = "")
+{
+	std::string sectionNameStr { sectionName };
+	std::string keyNameStr { keyName };
+	const char *value = GetIni().GetValue(sectionNameStr.c_str(), keyNameStr.c_str());
+	if (value == nullptr) {
+		CopyUtf8(string, defaultString, stringSize);
+		return false;
+	}
+	CopyUtf8(string, value, stringSize);
+	return true;
+}
+
+bool GetIniStringVector(const char *sectionName, const char *keyName, std::vector<std::string> &stringValues)
+{
+	std::list<CSimpleIni::Entry> values;
+	if (!GetIni().GetAllValues(sectionName, keyName, values)) {
+		return false;
+	}
+	for (auto &entry : values) {
+		stringValues.emplace_back(entry.pItem);
+	}
+	return true;
+}
+
 void SetIniValue(const char *keyname, const char *valuename, int value)
 {
 	IniChangedChecker changedChecker(keyname, valuename);
-	GetIni().SetLongValue(keyname, valuename, value);
-}
-
-void SetIniValue(const char *keyname, const char *valuename, std::uint8_t value)
-{
-	IniChangedChecker changedChecker(keyname, valuename);
-	GetIni().SetLongValue(keyname, valuename, value);
-}
-
-void SetIniValue(const char *keyname, const char *valuename, std::uint32_t value)
-{
-	IniChangedChecker changedChecker(keyname, valuename);
-	GetIni().SetLongValue(keyname, valuename, value);
+	GetIni().SetLongValue(keyname, valuename, value, nullptr, false, true);
 }
 
 void SetIniValue(const char *keyname, const char *valuename, bool value)
 {
 	IniChangedChecker changedChecker(keyname, valuename);
-	GetIni().SetLongValue(keyname, valuename, value ? 1 : 0);
+	GetIni().SetLongValue(keyname, valuename, value ? 1 : 0, nullptr, false, true);
 }
 
 void SetIniValue(const char *keyname, const char *valuename, float value)
 {
 	IniChangedChecker changedChecker(keyname, valuename);
-	GetIni().SetDoubleValue(keyname, valuename, value);
+	GetIni().SetDoubleValue(keyname, valuename, value, nullptr, true);
+}
+
+void SetIniValue(const char *sectionName, const char *keyName, const char *value)
+{
+	IniChangedChecker changedChecker(sectionName, keyName);
+	auto &ini = GetIni();
+	ini.SetValue(sectionName, keyName, value, nullptr, true);
+}
+
+void SetIniValue(string_view sectionName, string_view keyName, string_view value)
+{
+	std::string sectionNameStr { sectionName };
+	std::string keyNameStr { keyName };
+	std::string valueStr { value };
+	SetIniValue(sectionNameStr.c_str(), keyNameStr.c_str(), valueStr.c_str());
+}
+
+void SetIniValue(const char *keyname, const char *valuename, const std::vector<std::string> &stringValues)
+{
+	IniChangedChecker changedChecker(keyname, valuename);
+	bool firstSet = true;
+	for (auto &value : stringValues) {
+		GetIni().SetValue(keyname, valuename, value.c_str(), nullptr, firstSet);
+		firstSet = false;
+	}
+	if (firstSet)
+		GetIni().SetValue(keyname, valuename, "", nullptr, true);
 }
 
 void SaveIni()
@@ -178,13 +239,11 @@ void SaveIni()
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 bool HardwareCursorDefault()
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE == 1)
 	// See https://github.com/diasurgical/devilutionX/issues/2502
 	return false;
 #else
-	SDL_version v;
-	SDL_GetVersion(&v);
-	return SDL_VERSIONNUM(v.major, v.minor, v.patch) >= SDL_VERSIONNUM(2, 0, 12);
+	return HardwareCursorSupported();
 #endif
 }
 #endif
@@ -209,30 +268,71 @@ void OptionExperienceBarChanged()
 		FreeXPBar();
 }
 
+void OptionEnemyHealthBarChanged()
+{
+	if (!gbRunGame)
+		return;
+	if (*sgOptions.Gameplay.enemyHealthBar)
+		InitMonsterHealthBar();
+	else
+		FreeMonsterHealthBar();
+}
+
+void OptionShowFPSChanged()
+{
+	if (*sgOptions.Graphics.showFPS)
+		EnableFrameCount();
+	else
+		frameflag = false;
+}
+
+void OptionLanguageCodeChanged()
+{
+	LanguageInitialize();
+	LoadLanguageArchive();
+}
+
+void OptionGameModeChanged()
+{
+	gbIsHellfire = *sgOptions.StartUp.gameMode == StartUpGameMode::Hellfire;
+	discord_manager::UpdateMenu(true);
+}
+
+void OptionSharewareChanged()
+{
+	gbIsSpawn = *sgOptions.StartUp.shareware;
+}
+
+void OptionAudioChanged()
+{
+	effects_cleanup_sfx();
+	music_stop();
+	snd_deinit();
+	snd_init();
+	music_start(TMUSIC_INTRO);
+	if (gbRunGame)
+		sound_init();
+	else
+		ui_sound_init();
+}
+
 } // namespace
-
-void SetIniValue(const char *sectionName, const char *keyName, const char *value, int len)
-{
-	IniChangedChecker changedChecker(sectionName, keyName);
-	auto &ini = GetIni();
-	std::string stringValue(value, len != 0 ? len : strlen(value));
-	ini.SetValue(sectionName, keyName, stringValue.c_str());
-}
-
-bool GetIniValue(const char *sectionName, const char *keyName, char *string, int stringSize, const char *defaultString)
-{
-	const char *value = GetIni().GetValue(sectionName, keyName);
-	if (value == nullptr) {
-		CopyUtf8(string, defaultString, stringSize);
-		return false;
-	}
-	CopyUtf8(string, value, stringSize);
-	return true;
-}
 
 /** Game options */
 Options sgOptions;
-bool sbWasOptionsLoaded = false;
+
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+bool HardwareCursorSupported()
+{
+#if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE == 1)
+	return false;
+#else
+	SDL_version v;
+	SDL_GetVersion(&v);
+	return SDL_VERSIONNUM(v.major, v.minor, v.patch) >= SDL_VERSIONNUM(2, 0, 12);
+#endif
+}
+#endif
 
 void LoadOptions()
 {
@@ -242,67 +342,14 @@ void LoadOptions()
 		}
 	}
 
-	sgOptions.Diablo.lastSinglePlayerHero = GetIniInt("Diablo", "LastSinglePlayerHero", 0);
-	sgOptions.Diablo.lastMultiplayerHero = GetIniInt("Diablo", "LastMultiplayerHero", 0);
-	sgOptions.Hellfire.lastSinglePlayerHero = GetIniInt("Hellfire", "LastSinglePlayerHero", 0);
-	sgOptions.Hellfire.lastMultiplayerHero = GetIniInt("Hellfire", "LastMultiplayerHero", 0);
-	sgOptions.Hellfire.startUpGameOption = static_cast<StartUpGameOption>(GetIniInt("Hellfire", "StartUpGameOption", static_cast<int>(StartUpGameOption::None)));
 	GetIniValue("Hellfire", "SItem", sgOptions.Hellfire.szItem, sizeof(sgOptions.Hellfire.szItem), "");
 
-	sgOptions.Audio.nSoundVolume = GetIniInt("Audio", "Sound Volume", VOLUME_MAX);
-	sgOptions.Audio.nMusicVolume = GetIniInt("Audio", "Music Volume", VOLUME_MAX);
-
-	sgOptions.Audio.nSampleRate = GetIniInt("Audio", "Sample Rate", DEFAULT_AUDIO_SAMPLE_RATE);
-	sgOptions.Audio.nChannels = GetIniInt("Audio", "Channels", DEFAULT_AUDIO_CHANNELS);
-	sgOptions.Audio.nBufferSize = GetIniInt("Audio", "Buffer Size", DEFAULT_AUDIO_BUFFER_SIZE);
-	sgOptions.Audio.nResamplingQuality = GetIniInt("Audio", "Resampling Quality", DEFAULT_AUDIO_RESAMPLING_QUALITY);
-
-	sgOptions.Graphics.nWidth = GetIniInt("Graphics", "Width", DEFAULT_WIDTH);
-	sgOptions.Graphics.nHeight = GetIniInt("Graphics", "Height", DEFAULT_HEIGHT);
-#ifndef __vita__
-	sgOptions.Graphics.bFullscreen = GetIniBool("Graphics", "Fullscreen", true);
-#else
-	sgOptions.Graphics.bFullscreen = true;
-#endif
-#if !defined(USE_SDL1)
-	sgOptions.Graphics.bUpscale = GetIniBool("Graphics", "Upscale", true);
-#else
-	sgOptions.Graphics.bUpscale = false;
-#endif
-	sgOptions.Graphics.bFitToScreen = GetIniBool("Graphics", "Fit to Screen", true);
-	sgOptions.Graphics.bIntegerScaling = GetIniBool("Graphics", "Integer Scaling", false);
-	sgOptions.Graphics.bVSync = GetIniBool("Graphics", "Vertical Sync", true);
-	sgOptions.Graphics.bBlendedTransparancy = GetIniBool("Graphics", "Blended Transparency", true);
-	sgOptions.Graphics.nGammaCorrection = GetIniInt("Graphics", "Gamma Correction", 100);
-	sgOptions.Graphics.bColorCycling = GetIniBool("Graphics", "Color Cycling", true);
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	sgOptions.Graphics.bHardwareCursor = GetIniBool("Graphics", "Hardware Cursor", HardwareCursorDefault());
-	sgOptions.Graphics.bHardwareCursorForItems = GetIniBool("Graphics", "Hardware Cursor For Items", false);
-	sgOptions.Graphics.nHardwareCursorMaxSize = GetIniInt("Graphics", "Hardware Cursor Maximum Size", 128);
-#endif
-	sgOptions.Graphics.bFPSLimit = GetIniBool("Graphics", "FPS Limiter", true);
-	sgOptions.Graphics.bShowFPS = (GetIniInt("Graphics", "Show FPS", 0) != 0);
-
-	sgOptions.Gameplay.nTickRate = GetIniInt("Game", "Speed", 20);
-	sgOptions.Gameplay.bEnemyHealthBar = GetIniBool("Game", "Enemy Health Bar", false);
-	sgOptions.Gameplay.bAutoGoldPickup = GetIniBool("Game", "Auto Gold Pickup", AUTO_PICKUP_DEFAULT(false));
-	sgOptions.Gameplay.bAdriaRefillsMana = GetIniBool("Game", "Adria Refills Mana", false);
-	sgOptions.Gameplay.bAutoEquipWeapons = GetIniBool("Game", "Auto Equip Weapons", true);
-	sgOptions.Gameplay.bAutoEquipArmor = GetIniBool("Game", "Auto Equip Armor", AUTO_PICKUP_DEFAULT(false));
-	sgOptions.Gameplay.bAutoEquipHelms = GetIniBool("Game", "Auto Equip Helms", AUTO_PICKUP_DEFAULT(false));
-	sgOptions.Gameplay.bAutoEquipShields = GetIniBool("Game", "Auto Equip Shields", AUTO_PICKUP_DEFAULT(false));
-	sgOptions.Gameplay.bAutoEquipJewelry = GetIniBool("Game", "Auto Equip Jewelry", AUTO_PICKUP_DEFAULT(false));
-	sgOptions.Gameplay.bRandomizeQuests = GetIniBool("Game", "Randomize Quests", true);
-	sgOptions.Gameplay.bShowMonsterType = GetIniBool("Game", "Show Monster Type", false);
-	sgOptions.Gameplay.bDisableCripplingShrines = GetIniBool("Game", "Disable Crippling Shrines", false);
-	sgOptions.Gameplay.bAutoRefillBelt = GetIniBool("Game", "Auto Refill Belt", AUTO_PICKUP_DEFAULT(false));
-
 	GetIniValue("Network", "Bind Address", sgOptions.Network.szBindAddress, sizeof(sgOptions.Network.szBindAddress), "0.0.0.0");
-	sgOptions.Network.nPort = GetIniInt("Network", "Port", 6112);
+	GetIniValue("Network", "Previous Game ID", sgOptions.Network.szPreviousZTGame, sizeof(sgOptions.Network.szPreviousZTGame), "");
 	GetIniValue("Network", "Previous Host", sgOptions.Network.szPreviousHost, sizeof(sgOptions.Network.szPreviousHost), "");
 
 	for (size_t i = 0; i < QUICK_MESSAGE_OPTIONS; i++)
-		GetIniValue("NetMsg", QuickMessages[i].key, sgOptions.Chat.szHotKeyMsgs[i], MAX_SEND_STR_LEN, "");
+		GetIniStringVector("NetMsg", QuickMessages[i].key, sgOptions.Chat.szHotKeyMsgs[i]);
 
 	GetIniValue("Controller", "Mapping", sgOptions.Controller.szMapping, sizeof(sgOptions.Controller.szMapping), "");
 	sgOptions.Controller.bSwapShoulderButtonMode = GetIniBool("Controller", "Swap Shoulder Button Mode", false);
@@ -312,138 +359,25 @@ void LoadOptions()
 	sgOptions.Controller.bRearTouch = GetIniBool("Controller", "Enable Rear Touchpad", true);
 #endif
 
-#ifdef __ANDROID__
-	JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-	jobject activity = (jobject)SDL_AndroidGetActivity();
-	jclass clazz(env->GetObjectClass(activity));
-	jmethodID method_id = env->GetMethodID(clazz, "getLocale", "()Ljava/lang/String;");
-	jstring jLocale = (jstring)env->CallObjectMethod(activity, method_id);
-	const char *cLocale = env->GetStringUTFChars(jLocale, nullptr);
-	std::string locale = cLocale;
-	env->ReleaseStringUTFChars(jLocale, cLocale);
-	env->DeleteLocalRef(jLocale);
-	env->DeleteLocalRef(activity);
-	env->DeleteLocalRef(clazz);
-#elif defined(__vita__)
-	int32_t language = SCE_SYSTEM_PARAM_LANG_ENGLISH_US; // default to english
-	const char *vita_locales[] = {
-		"ja_JP",
-		"en_US",
-		"fr_FR",
-		"es_ES",
-		"de_DE",
-		"it_IT",
-		"nl_NL",
-		"pt_PT",
-		"ru_RU",
-		"ko_KR",
-		"zh_TW",
-		"zh_CN",
-		"fi_FI",
-		"sv_SE",
-		"da_DK",
-		"no_NO",
-		"pl_PL",
-		"pt_BR",
-		"en_GB",
-		"tr_TR",
-	};
-	SceAppUtilInitParam initParam;
-	SceAppUtilBootParam bootParam;
-	memset(&initParam, 0, sizeof(SceAppUtilInitParam));
-	memset(&bootParam, 0, sizeof(SceAppUtilBootParam));
-	sceAppUtilInit(&initParam, &bootParam);
-	sceAppUtilSystemParamGetInt(SCE_SYSTEM_PARAM_ID_LANG, &language);
-	if (language < 0 || language > SCE_SYSTEM_PARAM_LANG_TURKISH)
-		language = SCE_SYSTEM_PARAM_LANG_ENGLISH_US; // default to english
-	std::string locale = std::string(vita_locales[language]);
-	sceAppUtilShutdown();
-#elif defined(__3DS__)
-	std::string locale = n3ds::GetLocale();
-#else
-	std::string locale = std::locale("").name().substr(0, 5);
-#endif
-
-	locale = locale.substr(0, 5);
-	LogVerbose("Prefered locale: {}", locale);
-	if (!HasTranslation(locale)) {
-		locale = locale.substr(0, 2);
-		if (!HasTranslation(locale)) {
-			locale = "en";
-		}
-	}
-	LogVerbose("Best match locale: {}", locale);
-
-	GetIniValue("Language", "Code", sgOptions.Language.szCode, sizeof(sgOptions.Language.szCode), locale.c_str());
-
-	keymapper.Load();
-
 	if (demo::IsRunning())
 		demo::OverrideOptions();
-
-	sbWasOptionsLoaded = true;
 }
 
 void SaveOptions()
 {
+	if (demo::IsRunning())
+		return;
+
 	for (OptionCategoryBase *pCategory : sgOptions.GetCategories()) {
 		for (OptionEntryBase *pEntry : pCategory->GetEntries()) {
 			pEntry->SaveToIni(pCategory->GetKey());
 		}
 	}
 
-	SetIniValue("Diablo", "LastSinglePlayerHero", sgOptions.Diablo.lastSinglePlayerHero);
-	SetIniValue("Diablo", "LastMultiplayerHero", sgOptions.Diablo.lastMultiplayerHero);
 	SetIniValue("Hellfire", "SItem", sgOptions.Hellfire.szItem);
-	SetIniValue("Hellfire", "LastSinglePlayerHero", sgOptions.Hellfire.lastSinglePlayerHero);
-	SetIniValue("Hellfire", "LastMultiplayerHero", sgOptions.Hellfire.lastMultiplayerHero);
-	SetIniValue("Hellfire", "StartUpGameOption", static_cast<int>(sgOptions.Hellfire.startUpGameOption));
-
-	SetIniValue("Audio", "Sound Volume", sgOptions.Audio.nSoundVolume);
-	SetIniValue("Audio", "Music Volume", sgOptions.Audio.nMusicVolume);
-
-	SetIniValue("Audio", "Sample Rate", sgOptions.Audio.nSampleRate);
-	SetIniValue("Audio", "Channels", sgOptions.Audio.nChannels);
-	SetIniValue("Audio", "Buffer Size", sgOptions.Audio.nBufferSize);
-	SetIniValue("Audio", "Resampling Quality", sgOptions.Audio.nResamplingQuality);
-	SetIniValue("Graphics", "Width", sgOptions.Graphics.nWidth);
-	SetIniValue("Graphics", "Height", sgOptions.Graphics.nHeight);
-#ifndef __vita__
-	SetIniValue("Graphics", "Fullscreen", sgOptions.Graphics.bFullscreen);
-#endif
-#if !defined(USE_SDL1)
-	SetIniValue("Graphics", "Upscale", sgOptions.Graphics.bUpscale);
-#endif
-	SetIniValue("Graphics", "Fit to Screen", sgOptions.Graphics.bFitToScreen);
-	SetIniValue("Graphics", "Integer Scaling", sgOptions.Graphics.bIntegerScaling);
-	SetIniValue("Graphics", "Vertical Sync", sgOptions.Graphics.bVSync);
-	SetIniValue("Graphics", "Blended Transparency", sgOptions.Graphics.bBlendedTransparancy);
-	SetIniValue("Graphics", "Gamma Correction", sgOptions.Graphics.nGammaCorrection);
-	SetIniValue("Graphics", "Color Cycling", sgOptions.Graphics.bColorCycling);
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	SetIniValue("Graphics", "Hardware Cursor", sgOptions.Graphics.bHardwareCursor);
-	SetIniValue("Graphics", "Hardware Cursor For Items", sgOptions.Graphics.bHardwareCursorForItems);
-	SetIniValue("Graphics", "Hardware Cursor Maximum Size", sgOptions.Graphics.nHardwareCursorMaxSize);
-#endif
-	SetIniValue("Graphics", "FPS Limiter", sgOptions.Graphics.bFPSLimit);
-	SetIniValue("Graphics", "Show FPS", sgOptions.Graphics.bShowFPS);
-
-	SetIniValue("Game", "Speed", sgOptions.Gameplay.nTickRate);
-	SetIniValue("Game", "Enemy Health Bar", sgOptions.Gameplay.bEnemyHealthBar);
-	SetIniValue("Game", "Auto Gold Pickup", sgOptions.Gameplay.bAutoGoldPickup);
-	SetIniValue("Game", "Adria Refills Mana", sgOptions.Gameplay.bAdriaRefillsMana);
-	SetIniValue("Game", "Auto Equip Weapons", sgOptions.Gameplay.bAutoEquipWeapons);
-	SetIniValue("Game", "Auto Equip Armor", sgOptions.Gameplay.bAutoEquipArmor);
-	SetIniValue("Game", "Auto Equip Helms", sgOptions.Gameplay.bAutoEquipHelms);
-	SetIniValue("Game", "Auto Equip Shields", sgOptions.Gameplay.bAutoEquipShields);
-	SetIniValue("Game", "Auto Equip Jewelry", sgOptions.Gameplay.bAutoEquipJewelry);
-	SetIniValue("Game", "Randomize Quests", sgOptions.Gameplay.bRandomizeQuests);
-	SetIniValue("Game", "Show Monster Type", sgOptions.Gameplay.bShowMonsterType);
-	SetIniValue("Game", "Disable Crippling Shrines", sgOptions.Gameplay.bDisableCripplingShrines);
-	SetIniValue("Game", "Auto Refill Belt", sgOptions.Gameplay.bAutoRefillBelt);
 
 	SetIniValue("Network", "Bind Address", sgOptions.Network.szBindAddress);
-	SetIniValue("Network", "Port", sgOptions.Network.nPort);
+	SetIniValue("Network", "Previous Game ID", sgOptions.Network.szPreviousZTGame);
 	SetIniValue("Network", "Previous Host", sgOptions.Network.szPreviousHost);
 
 	for (size_t i = 0; i < QUICK_MESSAGE_OPTIONS; i++)
@@ -457,20 +391,16 @@ void SaveOptions()
 	SetIniValue("Controller", "Enable Rear Touchpad", sgOptions.Controller.bRearTouch);
 #endif
 
-	SetIniValue("Language", "Code", sgOptions.Language.szCode);
-
-	keymapper.Save();
-
 	SaveIni();
 }
 
 string_view OptionEntryBase::GetName() const
 {
-	return _(name.data());
+	return _(name);
 }
 string_view OptionEntryBase::GetDescription() const
 {
-	return _(description.data());
+	return _(description);
 }
 OptionEntryFlags OptionEntryBase::GetFlags() const
 {
@@ -478,7 +408,7 @@ OptionEntryFlags OptionEntryBase::GetFlags() const
 }
 void OptionEntryBase::SetValueChangedCallback(std::function<void()> callback)
 {
-	this->callback = callback;
+	this->callback = std::move(callback);
 }
 void OptionEntryBase::NotifyValueChanged()
 {
@@ -493,10 +423,6 @@ void OptionEntryBoolean::LoadFromIni(string_view category)
 void OptionEntryBoolean::SaveToIni(string_view category) const
 {
 	SetIniValue(category.data(), key.data(), value);
-}
-bool OptionEntryBoolean::operator*() const
-{
-	return value;
 }
 void OptionEntryBoolean::SetValue(bool value)
 {
@@ -529,9 +455,10 @@ void OptionEntryEnumBase::SaveToIni(string_view category) const
 {
 	SetIniValue(category.data(), key.data(), value);
 }
-int OptionEntryEnumBase::GetValueInternal() const
+void OptionEntryEnumBase::SetValueInternal(int value)
 {
-	return value;
+	this->value = value;
+	this->NotifyValueChanged();
 }
 void OptionEntryEnumBase::AddEntry(int value, string_view name)
 {
@@ -559,107 +486,573 @@ void OptionEntryEnumBase::SetActiveListIndex(size_t index)
 	this->NotifyValueChanged();
 }
 
-OptionCategoryBase::OptionCategoryBase(string_view key, string_view name, string_view description)
-    : key(key)
-    , name(name)
-    , description(description)
+void OptionEntryIntBase::LoadFromIni(string_view category)
 {
+	value = GetIniInt(category.data(), key.data(), defaultValue);
+	if (std::find(entryValues.begin(), entryValues.end(), value) == entryValues.end()) {
+		entryValues.push_back(value);
+		std::sort(entryValues.begin(), entryValues.end());
+		entryNames.clear();
+	}
 }
+void OptionEntryIntBase::SaveToIni(string_view category) const
+{
+	SetIniValue(category.data(), key.data(), value);
+}
+void OptionEntryIntBase::SetValueInternal(int value)
+{
+	this->value = value;
+	this->NotifyValueChanged();
+}
+void OptionEntryIntBase::AddEntry(int value)
+{
+	entryValues.push_back(value);
+}
+size_t OptionEntryIntBase::GetListSize() const
+{
+	return entryValues.size();
+}
+string_view OptionEntryIntBase::GetListDescription(size_t index) const
+{
+	if (entryNames.empty()) {
+		for (auto value : entryValues) {
+			entryNames.push_back(StrCat(value));
+		}
+	}
+	return entryNames[index].data();
+}
+size_t OptionEntryIntBase::GetActiveListIndex() const
+{
+	auto iterator = std::find(entryValues.begin(), entryValues.end(), value);
+	if (iterator == entryValues.end())
+		return 0;
+	return std::distance(entryValues.begin(), iterator);
+}
+void OptionEntryIntBase::SetActiveListIndex(size_t index)
+{
+	this->value = entryValues[index];
+	this->NotifyValueChanged();
+}
+
 string_view OptionCategoryBase::GetKey() const
 {
 	return key;
 }
 string_view OptionCategoryBase::GetName() const
 {
-	return _(name.data());
+	return _(name);
 }
 string_view OptionCategoryBase::GetDescription() const
 {
-	return _(description.data());
+	return _(description);
+}
+
+StartUpOptions::StartUpOptions()
+    : OptionCategoryBase("StartUp", N_("Start Up"), N_("Start Up Settings"))
+    , gameMode("Game", OptionEntryFlags::NeedHellfireMpq | OptionEntryFlags::RecreateUI, N_("Game Mode"), N_("Play Diablo or Hellfire."), StartUpGameMode::Ask,
+          {
+              { StartUpGameMode::Diablo, N_("Diablo") },
+              // Ask is missing, cause we want to hide it from UI-Settings.
+              { StartUpGameMode::Hellfire, N_("Hellfire") },
+          })
+    , shareware("Shareware", OptionEntryFlags::NeedDiabloMpq | OptionEntryFlags::RecreateUI, N_("Restrict to Shareware"), N_("Makes the game compatible with the demo. Enables multiplayer with friends who don't own a full copy of Diablo."), false)
+    , diabloIntro("Diablo Intro", OptionEntryFlags::OnlyDiablo, N_("Intro"), N_("Shown Intro cinematic."), StartUpIntro::Once,
+          {
+              { StartUpIntro::Off, N_("OFF") },
+              // Once is missing, cause we want to hide it from UI-Settings.
+              { StartUpIntro::On, N_("ON") },
+          })
+    , hellfireIntro("Hellfire Intro", OptionEntryFlags::OnlyHellfire, N_("Intro"), N_("Shown Intro cinematic."), StartUpIntro::Once,
+          {
+              { StartUpIntro::Off, N_("OFF") },
+              // Once is missing, cause we want to hide it from UI-Settings.
+              { StartUpIntro::On, N_("ON") },
+          })
+    , splash("Splash", OptionEntryFlags::None, N_("Splash"), N_("Shown splash screen."), StartUpSplash::LogoAndTitleDialog,
+          {
+              { StartUpSplash::LogoAndTitleDialog, N_("Logo and Title Screen") },
+              { StartUpSplash::TitleDialog, N_("Title Screen") },
+              { StartUpSplash::None, N_("None") },
+          })
+{
+	gameMode.SetValueChangedCallback(OptionGameModeChanged);
+	shareware.SetValueChangedCallback(OptionSharewareChanged);
+}
+std::vector<OptionEntryBase *> StartUpOptions::GetEntries()
+{
+	return {
+		&gameMode,
+		&shareware,
+		&diabloIntro,
+		&hellfireIntro,
+		&splash,
+	};
 }
 
 DiabloOptions::DiabloOptions()
     : OptionCategoryBase("Diablo", N_("Diablo"), N_("Diablo specific Settings"))
-    , intro("Intro", OptionEntryFlags::OnlyDiablo, N_("Intro"), N_("Enable/disable Intro cinematic."), true)
+    , lastSinglePlayerHero("LastSinglePlayerHero", OptionEntryFlags::Invisible | OptionEntryFlags::OnlyDiablo, "Sample Rate", "Remembers what singleplayer hero/save was last used.", 0)
+    , lastMultiplayerHero("LastMultiplayerHero", OptionEntryFlags::Invisible | OptionEntryFlags::OnlyDiablo, "Sample Rate", "Remembers what multiplayer hero/save was last used.", 0)
 {
 }
 std::vector<OptionEntryBase *> DiabloOptions::GetEntries()
 {
 	return {
-		&intro,
+		&lastSinglePlayerHero,
+		&lastMultiplayerHero,
 	};
 }
 
 HellfireOptions::HellfireOptions()
     : OptionCategoryBase("Hellfire", N_("Hellfire"), N_("Hellfire specific Settings"))
-    , intro("Intro", OptionEntryFlags::OnlyHellfire, N_("Intro"), N_("Enable/disable Intro cinematic."), true)
+    , lastSinglePlayerHero("LastSinglePlayerHero", OptionEntryFlags::Invisible | OptionEntryFlags::OnlyHellfire, "Sample Rate", "Remembers what singleplayer hero/save was last used.", 0)
+    , lastMultiplayerHero("LastMultiplayerHero", OptionEntryFlags::Invisible | OptionEntryFlags::OnlyHellfire, "Sample Rate", "Remembers what multiplayer hero/save was last used.", 0)
 {
 }
 std::vector<OptionEntryBase *> HellfireOptions::GetEntries()
 {
 	return {
-		&intro,
+		&lastSinglePlayerHero,
+		&lastMultiplayerHero,
 	};
 }
 
 AudioOptions::AudioOptions()
     : OptionCategoryBase("Audio", N_("Audio"), N_("Audio Settings"))
+    , soundVolume("Sound Volume", OptionEntryFlags::Invisible, "Sound Volume", "Movie and SFX volume.", VOLUME_MAX)
+    , musicVolume("Music Volume", OptionEntryFlags::Invisible, "Music Volume", "Music Volume.", VOLUME_MAX)
     , walkingSound("Walking Sound", OptionEntryFlags::None, N_("Walking Sound"), N_("Player emits sound when walking."), true)
-    , autoEquipSound("Auto Equip Sound", OptionEntryFlags::None, N_("Auto Equip Sound"), N_("Automatically equipping items on pickup emits the equipment sound."), AUTO_PICKUP_DEFAULT(false))
-    , itemPickupSound("Item Pickup Sound", OptionEntryFlags::None, N_("Item Pickup Sound"), N_("Picking up items emits the items pickup sound."), AUTO_PICKUP_DEFAULT(false))
+    , autoEquipSound("Auto Equip Sound", OptionEntryFlags::None, N_("Auto Equip Sound"), N_("Automatically equipping items on pickup emits the equipment sound."), false)
+    , itemPickupSound("Item Pickup Sound", OptionEntryFlags::None, N_("Item Pickup Sound"), N_("Picking up items emits the items pickup sound."), false)
+    , sampleRate("Sample Rate", OptionEntryFlags::CantChangeInGame, N_("Sample Rate"), N_("Output sample rate (Hz)."), DEFAULT_AUDIO_SAMPLE_RATE, { 22050, 44100, 48000 })
+    , channels("Channels", OptionEntryFlags::CantChangeInGame, N_("Channels"), N_("Number of output channels."), DEFAULT_AUDIO_CHANNELS, { 1, 2 })
+    , bufferSize("Buffer Size", OptionEntryFlags::CantChangeInGame, N_("Buffer Size"), N_("Buffer size (number of frames per channel)."), DEFAULT_AUDIO_BUFFER_SIZE, { 1024, 2048, 5120 })
+    , resamplingQuality("Resampling Quality", OptionEntryFlags::CantChangeInGame, N_("Resampling Quality"), N_("Quality of the resampler, from 0 (lowest) to 10 (highest)."), DEFAULT_AUDIO_RESAMPLING_QUALITY, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 })
 {
+	sampleRate.SetValueChangedCallback(OptionAudioChanged);
+	channels.SetValueChangedCallback(OptionAudioChanged);
+	bufferSize.SetValueChangedCallback(OptionAudioChanged);
+	resamplingQuality.SetValueChangedCallback(OptionAudioChanged);
+	resampler.SetValueChangedCallback(OptionAudioChanged);
+	device.SetValueChangedCallback(OptionAudioChanged);
 }
 std::vector<OptionEntryBase *> AudioOptions::GetEntries()
 {
+	// clang-format off
 	return {
+		&soundVolume,
+		&musicVolume,
 		&walkingSound,
 		&autoEquipSound,
 		&itemPickupSound,
+		&sampleRate,
+		&channels,
+		&bufferSize,
+		&resampler,
+		&resamplingQuality,
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+		&device,
+#endif
 	};
+	// clang-format on
+}
+
+OptionEntryResolution::OptionEntryResolution()
+    : OptionEntryListBase("", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Resolution"), N_("Affect the game's internal resolution and determine your view area. Note: This can differ from screen resolution, when Upscaling, Integer Scaling or Fit to Screen is used."))
+{
+}
+void OptionEntryResolution::LoadFromIni(string_view category)
+{
+	size = { GetIniInt(category.data(), "Width", DEFAULT_WIDTH), GetIniInt(category.data(), "Height", DEFAULT_HEIGHT) };
+}
+void OptionEntryResolution::SaveToIni(string_view category) const
+{
+	SetIniValue(category.data(), "Width", size.width);
+	SetIniValue(category.data(), "Height", size.height);
+}
+
+void OptionEntryResolution::CheckResolutionsAreInitialized() const
+{
+	if (!resolutions.empty())
+		return;
+
+	std::vector<Size> sizes;
+	float scaleFactor = GetDpiScalingFactor();
+
+	// Add resolutions
+#ifdef USE_SDL1
+	auto *modes = SDL_ListModes(nullptr, SDL_FULLSCREEN | SDL_HWPALETTE);
+	// SDL_ListModes returns -1 if any resolution is allowed (for example returned on 3DS)
+	if (modes != nullptr && modes != (SDL_Rect **)-1) {
+		for (size_t i = 0; modes[i] != nullptr; i++) {
+			if (modes[i]->w < modes[i]->h) {
+				std::swap(modes[i]->w, modes[i]->h);
+			}
+			sizes.emplace_back(Size {
+			    static_cast<int>(modes[i]->w * scaleFactor),
+			    static_cast<int>(modes[i]->h * scaleFactor) });
+		}
+	}
+#else
+	int displayModeCount = SDL_GetNumDisplayModes(0);
+	for (int i = 0; i < displayModeCount; i++) {
+		SDL_DisplayMode mode;
+		if (SDL_GetDisplayMode(0, i, &mode) != 0) {
+			ErrSdl();
+		}
+		if (mode.w < mode.h) {
+			std::swap(mode.w, mode.h);
+		}
+		sizes.emplace_back(Size {
+		    static_cast<int>(mode.w * scaleFactor),
+		    static_cast<int>(mode.h * scaleFactor) });
+	}
+#endif
+
+	// Ensures that the ini specified resolution is present in resolution list even if it doesn't match a monitor resolution (for example if played in window mode)
+	sizes.push_back(this->size);
+	// Ensures that the vanilla/default resolution is always present
+	sizes.emplace_back(Size { DEFAULT_WIDTH, DEFAULT_HEIGHT });
+
+	// Sort by width then by height
+	std::sort(sizes.begin(), sizes.end(),
+	    [](const Size &x, const Size &y) -> bool {
+		    if (x.width == y.width)
+			    return x.height > y.height;
+		    return x.width > y.width;
+	    });
+	// Remove duplicate entries
+	sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+
+	for (auto &size : sizes) {
+		resolutions.emplace_back(size, StrCat(size.width, "x", size.height));
+	}
+}
+
+size_t OptionEntryResolution::GetListSize() const
+{
+	CheckResolutionsAreInitialized();
+	return resolutions.size();
+}
+string_view OptionEntryResolution::GetListDescription(size_t index) const
+{
+	CheckResolutionsAreInitialized();
+	return resolutions[index].second;
+}
+size_t OptionEntryResolution::GetActiveListIndex() const
+{
+	CheckResolutionsAreInitialized();
+	auto found = std::find_if(resolutions.begin(), resolutions.end(), [this](const auto &x) { return x.first == this->size; });
+	if (found == resolutions.end())
+		return 0;
+	return std::distance(resolutions.begin(), found);
+}
+void OptionEntryResolution::SetActiveListIndex(size_t index)
+{
+	size = resolutions[index].first;
+	NotifyValueChanged();
+}
+
+OptionEntryResampler::OptionEntryResampler()
+    : OptionEntryListBase("Resampler", OptionEntryFlags::CantChangeInGame
+            // When there are exactly 2 options there is no submenu, so we need to recreate the UI
+            // to reflect the change in the "Resampling quality" setting visibility.
+            | (NumResamplers == 2 ? OptionEntryFlags::RecreateUI : OptionEntryFlags::None),
+        N_("Resampler"), N_("Audio resampler"))
+{
+}
+void OptionEntryResampler::LoadFromIni(string_view category)
+{
+	char resamplerStr[32];
+	if (GetIniValue(category, key, resamplerStr, sizeof(resamplerStr))) {
+		std::optional<Resampler> resampler = ResamplerFromString(resamplerStr);
+		if (resampler) {
+			resampler_ = *resampler;
+			UpdateDependentOptions();
+			return;
+		}
+	}
+	resampler_ = Resampler::DEVILUTIONX_DEFAULT_RESAMPLER;
+	UpdateDependentOptions();
+}
+
+void OptionEntryResampler::SaveToIni(string_view category) const
+{
+	SetIniValue(category, key, ResamplerToString(resampler_));
+}
+
+size_t OptionEntryResampler::GetListSize() const
+{
+	return NumResamplers;
+}
+
+string_view OptionEntryResampler::GetListDescription(size_t index) const
+{
+	return ResamplerToString(static_cast<Resampler>(index));
+}
+
+size_t OptionEntryResampler::GetActiveListIndex() const
+{
+	return static_cast<size_t>(resampler_);
+}
+
+void OptionEntryResampler::SetActiveListIndex(size_t index)
+{
+	resampler_ = static_cast<Resampler>(index);
+	UpdateDependentOptions();
+	NotifyValueChanged();
+}
+
+void OptionEntryResampler::UpdateDependentOptions() const
+{
+#ifdef DEVILUTIONX_RESAMPLER_SPEEX
+	if (resampler_ == Resampler::Speex) {
+		sgOptions.Audio.resamplingQuality.flags &= ~OptionEntryFlags::Invisible;
+	} else {
+		sgOptions.Audio.resamplingQuality.flags |= OptionEntryFlags::Invisible;
+	}
+#endif
+}
+
+OptionEntryAudioDevice::OptionEntryAudioDevice()
+    : OptionEntryListBase("Device", OptionEntryFlags::CantChangeInGame, N_("Device"), N_("Audio device"))
+{
+}
+void OptionEntryAudioDevice::LoadFromIni(string_view category)
+{
+	char deviceStr[100];
+	GetIniValue(category, key, deviceStr, sizeof(deviceStr), "");
+	deviceName_ = deviceStr;
+}
+
+void OptionEntryAudioDevice::SaveToIni(string_view category) const
+{
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	SetIniValue(category, key, deviceName_);
+#endif
+}
+
+size_t OptionEntryAudioDevice::GetListSize() const
+{
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	return SDL_GetNumAudioDevices(false) + 1;
+#else
+	return 1;
+#endif
+}
+
+string_view OptionEntryAudioDevice::GetListDescription(size_t index) const
+{
+	constexpr int MaxWidth = 500;
+
+	string_view deviceName = GetDeviceName(index);
+	if (deviceName.empty())
+		return "System Default";
+
+	while (GetLineWidth(deviceName, GameFont24, 1) > MaxWidth) {
+		size_t lastSymbolIndex = FindLastUtf8Symbols(deviceName);
+		deviceName = string_view(deviceName.data(), lastSymbolIndex);
+	}
+
+	return deviceName;
+}
+
+size_t OptionEntryAudioDevice::GetActiveListIndex() const
+{
+	for (size_t i = 0; i < GetListSize(); i++) {
+		string_view deviceName = GetDeviceName(i);
+		if (deviceName == deviceName_)
+			return i;
+	}
+	return 0;
+}
+
+void OptionEntryAudioDevice::SetActiveListIndex(size_t index)
+{
+	deviceName_ = std::string { GetDeviceName(index) };
+	NotifyValueChanged();
+}
+
+string_view OptionEntryAudioDevice::GetDeviceName(size_t index) const
+{
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	if (index != 0)
+		return SDL_GetAudioDeviceName(index - 1, false);
+#endif
+	return "";
 }
 
 GraphicsOptions::GraphicsOptions()
     : OptionCategoryBase("Graphics", N_("Graphics"), N_("Graphics Settings"))
+    , fullscreen("Fullscreen", OnlyIfSupportsWindowed | OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Fullscreen"), N_("Display the game in windowed or fullscreen mode."), true)
+#if !defined(USE_SDL1) || defined(__3DS__)
+    , fitToScreen("Fit to Screen", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Fit to Screen"), N_("Automatically adjust the game window to your current desktop screen aspect ratio and resolution."), true)
+#endif
+#ifndef USE_SDL1
+    , upscale("Upscale", OnlyIfNoImplicitRenderer | OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Upscale"), N_("Enables image scaling from the game resolution to your monitor resolution. Prevents changing the monitor resolution and allows window resizing."),
+#ifdef NXDK
+          false
+#else
+          true
+#endif
+          )
     , scaleQuality("Scaling Quality", OptionEntryFlags::None, N_("Scaling Quality"), N_("Enables optional filters to the output image when upscaling."), ScalingQuality::AnisotropicFiltering,
           {
               { ScalingQuality::NearestPixel, N_("Nearest Pixel") },
               { ScalingQuality::BilinearFiltering, N_("Bilinear") },
               { ScalingQuality::AnisotropicFiltering, N_("Anisotropic") },
           })
+    , integerScaling("Integer Scaling", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Integer Scaling"), N_("Scales the image using whole number pixel ratio."), false)
+    , vSync("Vertical Sync",
+          OptionEntryFlags::RecreateUI
+#ifdef NXDK
+              | OptionEntryFlags::Invisible
+#endif
+          ,
+          N_("Vertical Sync"),
+          N_("Forces waiting for Vertical Sync. Prevents tearing effect when drawing a frame. Disabling it can help with mouse lag on some systems."),
+#ifdef NXDK
+          false
+#else
+          true
+#endif
+          )
+#endif
+    , gammaCorrection("Gamma Correction", OptionEntryFlags::Invisible, "Gamma Correction", "Gamma correction level.", 100)
+    , zoom("Zoom", OptionEntryFlags::None, N_("Zoom"), N_("Zoom on when enabled."), false)
+    , colorCycling("Color Cycling", OptionEntryFlags::None, N_("Color Cycling"), N_("Color cycling effect used for water, lava, and acid animation."), true)
+    , alternateNestArt("Alternate nest art", OptionEntryFlags::OnlyHellfire | OptionEntryFlags::CantChangeInGame, N_("Alternate nest art"), N_("The game will use an alternative palette for Hellfire’s nest tileset."), false)
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+    , hardwareCursor("Hardware Cursor", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI | (HardwareCursorSupported() ? OptionEntryFlags::None : OptionEntryFlags::Invisible), N_("Hardware Cursor"), N_("Use a hardware cursor"), HardwareCursorDefault())
+    , hardwareCursorForItems("Hardware Cursor For Items", OptionEntryFlags::CantChangeInGame | (HardwareCursorSupported() ? OptionEntryFlags::None : OptionEntryFlags::Invisible), N_("Hardware Cursor For Items"), N_("Use a hardware cursor for items."), false)
+    , hardwareCursorMaxSize("Hardware Cursor Maximum Size", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI | (HardwareCursorSupported() ? OptionEntryFlags::None : OptionEntryFlags::Invisible), N_("Hardware Cursor Maximum Size"), N_("Maximum width / height for the hardware cursor. Larger cursors fall back to software."), 128, { 0, 64, 128, 256, 512 })
+#endif
+    , limitFPS("FPS Limiter", OptionEntryFlags::None, N_("FPS Limiter"), N_("FPS is limited to avoid high CPU load. Limit considers refresh rate."), true)
+    , showFPS("Show FPS", OptionEntryFlags::None, N_("Show FPS"), N_("Displays the FPS in the upper left corner of the screen."), false)
+    , showHealthValues("Show health values", OptionEntryFlags::None, N_("Show health values"), N_("Displays current / max health value on health globe."), false)
+    , showManaValues("Show mana values", OptionEntryFlags::None, N_("Show mana values"), N_("Displays current / max mana value on mana globe."), false)
 {
+	resolution.SetValueChangedCallback(ResizeWindow);
+	fullscreen.SetValueChangedCallback(SetFullscreenMode);
+#if !defined(USE_SDL1) || defined(__3DS__)
+	fitToScreen.SetValueChangedCallback(ResizeWindow);
+#endif
+#ifndef USE_SDL1
+	upscale.SetValueChangedCallback(ResizeWindow);
+	scaleQuality.SetValueChangedCallback(ReinitializeTexture);
+	integerScaling.SetValueChangedCallback(ReinitializeIntegerScale);
+	vSync.SetValueChangedCallback(ReinitializeRenderer);
+#endif
+	showFPS.SetValueChangedCallback(OptionShowFPSChanged);
 }
 std::vector<OptionEntryBase *> GraphicsOptions::GetEntries()
 {
+	// clang-format off
 	return {
+		&resolution,
+#ifndef __vita__
+		&fullscreen,
+#endif
+#if !defined(USE_SDL1) || defined(__3DS__)
+		&fitToScreen,
+#endif
+#ifndef USE_SDL1
+		&upscale,
 		&scaleQuality,
+		&integerScaling,
+		&vSync,
+#endif
+		&gammaCorrection,
+		&zoom,
+		&limitFPS,
+		&showFPS,
+		&showHealthValues,
+		&showManaValues,
+		&colorCycling,
+		&alternateNestArt,
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+		&hardwareCursor,
+		&hardwareCursorForItems,
+		&hardwareCursorMaxSize,
+#endif
 	};
+	// clang-format on
 }
 
 GameplayOptions::GameplayOptions()
     : OptionCategoryBase("Game", N_("Gameplay"), N_("Gameplay Settings"))
-    , runInTown("Run in Town", OptionEntryFlags::CantChangeInMultiPlayer, N_("Run in Town"), N_("Enable jogging/fast walking in town for Diablo and Hellfire. This option was introduced in the expansion."), AUTO_PICKUP_DEFAULT(false))
+    , tickRate("Speed", OptionEntryFlags::Invisible, "Speed", "Gameplay ticks per second.", 20)
+    , runInTown("Run in Town", OptionEntryFlags::CantChangeInMultiPlayer, N_("Run in Town"), N_("Enable jogging/fast walking in town for Diablo and Hellfire. This option was introduced in the expansion."), false)
     , grabInput("Grab Input", OptionEntryFlags::None, N_("Grab Input"), N_("When enabled mouse is locked to the game window."), false)
     , theoQuest("Theo Quest", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::OnlyHellfire, N_("Theo Quest"), N_("Enable Little Girl quest."), false)
     , cowQuest("Cow Quest", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::OnlyHellfire, N_("Cow Quest"), N_("Enable Jersey's quest. Lester the farmer is replaced by the Complete Nut."), false)
     , friendlyFire("Friendly Fire", OptionEntryFlags::CantChangeInMultiPlayer, N_("Friendly Fire"), N_("Allow arrow/spell damage between players in multiplayer even when the friendly mode is on."), true)
     , testBard("Test Bard", OptionEntryFlags::CantChangeInGame, N_("Test Bard"), N_("Force the Bard character type to appear in the hero selection menu."), false)
     , testBarbarian("Test Barbarian", OptionEntryFlags::CantChangeInGame, N_("Test Barbarian"), N_("Force the Barbarian character type to appear in the hero selection menu."), false)
-    , experienceBar("Experience Bar", OptionEntryFlags::None, N_("Experience Bar"), N_("Experience Bar is added to the UI at the bottom of the screen."), AUTO_PICKUP_DEFAULT(false))
+    , experienceBar("Experience Bar", OptionEntryFlags::None, N_("Experience Bar"), N_("Experience Bar is added to the UI at the bottom of the screen."), false)
+    , enemyHealthBar("Enemy Health Bar", OptionEntryFlags::None, N_("Enemy Health Bar"), N_("Enemy Health Bar is displayed at the top of the screen."), false)
+    , autoGoldPickup("Auto Gold Pickup", OptionEntryFlags::None, N_("Auto Gold Pickup"), N_("Gold is automatically collected when in close proximity to the player."), false)
+    , autoElixirPickup("Auto Elixir Pickup", OptionEntryFlags::None, N_("Auto Elixir Pickup"), N_("Elixirs are automatically collected when in close proximity to the player."), false)
+    , autoOilPickup("Auto Oil Pickup", OptionEntryFlags::OnlyHellfire, N_("Auto Oil Pickup"), N_("Oils are automatically collected when in close proximity to the player."), false)
+    , autoPickupInTown("Auto Pickup in Town", OptionEntryFlags::None, N_("Auto Pickup in Town"), N_("Automatically pickup items in town."), false)
+    , adriaRefillsMana("Adria Refills Mana", OptionEntryFlags::None, N_("Adria Refills Mana"), N_("Adria will refill your mana when you visit her shop."), false)
+    , autoEquipWeapons("Auto Equip Weapons", OptionEntryFlags::None, N_("Auto Equip Weapons"), N_("Weapons will be automatically equipped on pickup or purchase if enabled."), true)
+    , autoEquipArmor("Auto Equip Armor", OptionEntryFlags::None, N_("Auto Equip Armor"), N_("Armor will be automatically equipped on pickup or purchase if enabled."), false)
+    , autoEquipHelms("Auto Equip Helms", OptionEntryFlags::None, N_("Auto Equip Helms"), N_("Helms will be automatically equipped on pickup or purchase if enabled."), false)
+    , autoEquipShields("Auto Equip Shields", OptionEntryFlags::None, N_("Auto Equip Shields"), N_("Shields will be automatically equipped on pickup or purchase if enabled."), false)
+    , autoEquipJewelry("Auto Equip Jewelry", OptionEntryFlags::None, N_("Auto Equip Jewelry"), N_("Jewelry will be automatically equipped on pickup or purchase if enabled."), false)
+    , randomizeQuests("Randomize Quests", OptionEntryFlags::CantChangeInGame, N_("Randomize Quests"), N_("Randomly selecting available quests for new games."), true)
+    , showMonsterType("Show Monster Type", OptionEntryFlags::None, N_("Show Monster Type"), N_("Hovering over a monster will display the type of monster in the description box in the UI."), false)
+    , showItemLabels("Show Item Labels", OptionEntryFlags::None, N_("Show Item Labels"), N_("Show labels for items on the ground when enabled."), false)
+    , autoRefillBelt("Auto Refill Belt", OptionEntryFlags::None, N_("Auto Refill Belt"), N_("Refill belt from inventory when belt item is consumed."), false)
+    , disableCripplingShrines("Disable Crippling Shrines", OptionEntryFlags::None, N_("Disable Crippling Shrines"), N_("When enabled Cauldrons, Fascinating Shrines, Goat Shrines, Ornate Shrines and Sacred Shrines are not able to be clicked on and labeled as disabled."), false)
+    , quickCast("Quick Cast", OptionEntryFlags::None, N_("Quick Cast"), N_("Spell hotkeys instantly cast the spell, rather than switching the readied spell."), false)
+    , numHealPotionPickup("Heal Potion Pickup", OptionEntryFlags::None, N_("Heal Potion Pickup"), N_("Number of Healing potions to pick up automatically."), 0, { 0, 1, 2, 4, 8, 16 })
+    , numFullHealPotionPickup("Full Heal Potion Pickup", OptionEntryFlags::None, N_("Full Heal Potion Pickup"), N_("Number of Full Healing potions to pick up automatically."), 0, { 0, 1, 2, 4, 8, 16 })
+    , numManaPotionPickup("Mana Potion Pickup", OptionEntryFlags::None, N_("Mana Potion Pickup"), N_("Number of Mana potions to pick up automatically."), 0, { 0, 1, 2, 4, 8, 16 })
+    , numFullManaPotionPickup("Full Mana Potion Pickup", OptionEntryFlags::None, N_("Full Mana Potion Pickup"), N_("Number of Full Mana potions to pick up automatically."), 0, { 0, 1, 2, 4, 8, 16 })
+    , numRejuPotionPickup("Rejuvenation Potion Pickup", OptionEntryFlags::None, N_("Rejuvenation Potion Pickup"), N_("Number of Rejuvenation potions to pick up automatically."), 0, { 0, 1, 2, 4, 8, 16 })
+    , numFullRejuPotionPickup("Full Rejuvenation Potion Pickup", OptionEntryFlags::None, N_("Full Rejuvenation Potion Pickup"), N_("Number of Full Rejuvenation potions to pick up automatically."), 0, { 0, 1, 2, 4, 8, 16 })
 {
 	grabInput.SetValueChangedCallback(OptionGrabInputChanged);
-	grabInput.SetValueChangedCallback(OptionExperienceBarChanged);
+	experienceBar.SetValueChangedCallback(OptionExperienceBarChanged);
+	enemyHealthBar.SetValueChangedCallback(OptionEnemyHealthBarChanged);
 }
 std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 {
 	return {
-		&runInTown,
+		&tickRate,
 		&grabInput,
+		&runInTown,
+		&adriaRefillsMana,
+		&randomizeQuests,
 		&theoQuest,
 		&cowQuest,
 		&friendlyFire,
 		&testBard,
 		&testBarbarian,
 		&experienceBar,
+		&enemyHealthBar,
+		&showMonsterType,
+		&showItemLabels,
+		&disableCripplingShrines,
+		&quickCast,
+		&autoRefillBelt,
+		&autoPickupInTown,
+		&autoGoldPickup,
+		&autoElixirPickup,
+		&autoOilPickup,
+		&autoEquipWeapons,
+		&autoEquipArmor,
+		&autoEquipHelms,
+		&autoEquipShields,
+		&autoEquipJewelry,
+		&numHealPotionPickup,
+		&numFullHealPotionPickup,
+		&numManaPotionPickup,
+		&numFullManaPotionPickup,
+		&numRejuPotionPickup,
+		&numFullRejuPotionPickup,
 	};
 }
 
@@ -674,11 +1067,14 @@ std::vector<OptionEntryBase *> ControllerOptions::GetEntries()
 
 NetworkOptions::NetworkOptions()
     : OptionCategoryBase("Network", N_("Network"), N_("Network Settings"))
+    , port("Port", OptionEntryFlags::Invisible, "Port", "What network port to use.", 6112)
 {
 }
 std::vector<OptionEntryBase *> NetworkOptions::GetEntries()
 {
-	return {};
+	return {
+		&port,
+	};
 }
 
 ChatOptions::ChatOptions()
@@ -690,13 +1086,371 @@ std::vector<OptionEntryBase *> ChatOptions::GetEntries()
 	return {};
 }
 
+OptionEntryLanguageCode::OptionEntryLanguageCode()
+    : OptionEntryListBase("Code", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Language"), N_("Define what language to use in game."))
+{
+}
+void OptionEntryLanguageCode::LoadFromIni(string_view category)
+{
+	if (GetIniValue(category, key, szCode, sizeof(szCode))) {
+		if (HasTranslation(szCode)) {
+			// User preferred language is available
+			return;
+		}
+	}
+
+	// Might be a first run or the user has attempted to load a translation that doesn't exist via manual ini edit. Try
+	//  find a best fit from the platform locale information.
+	std::vector<std::string> locales = GetLocales();
+
+	// So that the correct language is shown in the settings menu for users with US english set as a preferred language
+	//  we need to replace the "en_US" locale code with the neutral string "en" as expected by the available options
+	std::replace(locales.begin(), locales.end(), std::string { "en_US" }, std::string { "en" });
+
+	// Insert non-regional locale codes after the last regional variation so we fallback to neutral translations if no
+	//  regional translation exists that meets user preferences.
+	for (auto localeIter = locales.rbegin(); localeIter != locales.rend(); localeIter++) {
+		auto regionSeparator = localeIter->find('_');
+		if (regionSeparator != std::string::npos) {
+			std::string neutralLocale = localeIter->substr(0, regionSeparator);
+			if (std::find(locales.rbegin(), localeIter, neutralLocale) == localeIter) {
+				localeIter = std::make_reverse_iterator(locales.insert(localeIter.base(), neutralLocale));
+			}
+		}
+	}
+
+	LogVerbose("Found user preferred locales: {}", fmt::join(locales, ", "));
+
+	for (const auto &locale : locales) {
+		LogVerbose("Trying to load translation: {}", locale);
+		if (HasTranslation(locale)) {
+			LogVerbose("Best match locale: {}", locale);
+			CopyUtf8(szCode, locale, sizeof(szCode));
+			return;
+		}
+	}
+
+	LogVerbose("No suitable translation found");
+	strcpy(szCode, "en");
+}
+void OptionEntryLanguageCode::SaveToIni(string_view category) const
+{
+	SetIniValue(category, key, szCode);
+}
+
+void OptionEntryLanguageCode::CheckLanguagesAreInitialized() const
+{
+	if (!languages.empty())
+		return;
+
+	// Add well-known supported languages
+	languages.emplace_back("bg", "Български");
+	languages.emplace_back("cs", "Čeština");
+	languages.emplace_back("da", "Dansk");
+	languages.emplace_back("de", "Deutsch");
+	languages.emplace_back("el", "Ελληνικά");
+	languages.emplace_back("en", "English");
+	languages.emplace_back("es", "Español");
+	languages.emplace_back("fr", "Français");
+	languages.emplace_back("hr", "Hrvatski");
+	languages.emplace_back("it", "Italiano");
+
+	if (font_mpq) {
+		languages.emplace_back("ja", "日本語");
+		languages.emplace_back("ko", "한국어");
+	}
+
+	languages.emplace_back("pl", "Polski");
+	languages.emplace_back("pt_BR", "Português do Brasil");
+	languages.emplace_back("ro", "Română");
+	languages.emplace_back("ru", "Русский");
+	languages.emplace_back("sv", "Svenska");
+	languages.emplace_back("uk", "Українська");
+
+	if (font_mpq) {
+		languages.emplace_back("zh_CN", "汉语");
+		languages.emplace_back("zh_TW", "漢語");
+	}
+
+	// Ensures that the ini specified language is present in languages list even if unknown (for example if someone starts to translate a new language)
+	if (std::find_if(languages.begin(), languages.end(), [this](const auto &x) { return x.first == this->szCode; }) == languages.end()) {
+		languages.emplace_back(szCode, szCode);
+	}
+}
+
+size_t OptionEntryLanguageCode::GetListSize() const
+{
+	CheckLanguagesAreInitialized();
+	return languages.size();
+}
+string_view OptionEntryLanguageCode::GetListDescription(size_t index) const
+{
+	CheckLanguagesAreInitialized();
+	return languages[index].second;
+}
+size_t OptionEntryLanguageCode::GetActiveListIndex() const
+{
+	CheckLanguagesAreInitialized();
+	auto found = std::find_if(languages.begin(), languages.end(), [this](const auto &x) { return x.first == this->szCode; });
+	if (found == languages.end())
+		return 0;
+	return std::distance(languages.begin(), found);
+}
+void OptionEntryLanguageCode::SetActiveListIndex(size_t index)
+{
+	CopyUtf8(szCode, languages[index].first, sizeof(szCode));
+	NotifyValueChanged();
+}
+
 LanguageOptions::LanguageOptions()
     : OptionCategoryBase("Language", N_("Language"), N_("Language Settings"))
 {
+	code.SetValueChangedCallback(OptionLanguageCodeChanged);
 }
 std::vector<OptionEntryBase *> LanguageOptions::GetEntries()
 {
-	return {};
+	return {
+		&code,
+	};
+}
+
+KeymapperOptions::KeymapperOptions()
+    : OptionCategoryBase("Keymapping", N_("Keymapping"), N_("Keymapping Settings"))
+{
+	// Insert all supported keys: a-z, 0-9 and F1-F12.
+	keyIDToKeyName.reserve(('Z' - 'A' + 1) + ('9' - '0' + 1) + 12);
+	for (char c = 'A'; c <= 'Z'; ++c) {
+		keyIDToKeyName.emplace(c, std::string(1, c));
+	}
+	for (char c = '0'; c <= '9'; ++c) {
+		keyIDToKeyName.emplace(c, std::string(1, c));
+	}
+	for (int i = 0; i < 12; ++i) {
+		keyIDToKeyName.emplace(SDLK_F1 + i, StrCat("F", i + 1));
+	}
+
+	keyIDToKeyName.emplace(SDLK_LALT, "LALT");
+	keyIDToKeyName.emplace(SDLK_RALT, "RALT");
+	keyIDToKeyName.emplace(SDLK_SPACE, "SPACE");
+	keyIDToKeyName.emplace(SDLK_RCTRL, "RCONTROL");
+	keyIDToKeyName.emplace(SDLK_LCTRL, "LCONTROL");
+	keyIDToKeyName.emplace(SDLK_PRINTSCREEN, "PRINT");
+	keyIDToKeyName.emplace(SDLK_PAUSE, "PAUSE");
+	keyIDToKeyName.emplace(SDLK_TAB, "TAB");
+	keyIDToKeyName.emplace(SDL_BUTTON_MIDDLE | KeymapperMouseButtonMask, "MMOUSE");
+	keyIDToKeyName.emplace(SDL_BUTTON_X1 | KeymapperMouseButtonMask, "X1MOUSE");
+	keyIDToKeyName.emplace(SDL_BUTTON_X2 | KeymapperMouseButtonMask, "X2MOUSE");
+
+	keyNameToKeyID.reserve(keyIDToKeyName.size());
+	for (const auto &kv : keyIDToKeyName) {
+		keyNameToKeyID.emplace(kv.second, kv.first);
+	}
+}
+
+std::vector<OptionEntryBase *> KeymapperOptions::GetEntries()
+{
+	std::vector<OptionEntryBase *> entries;
+	for (auto &action : actions) {
+		entries.push_back(action.get());
+	}
+	return entries;
+}
+
+KeymapperOptions::Action::Action(string_view key, const char *name, const char *description, uint32_t defaultKey, std::function<void()> actionPressed, std::function<void()> actionReleased, std::function<bool()> enable, unsigned index)
+    : OptionEntryBase(key, OptionEntryFlags::None, name, description)
+    , defaultKey(defaultKey)
+    , actionPressed(std::move(actionPressed))
+    , actionReleased(std::move(actionReleased))
+    , enable(std::move(enable))
+    , dynamicIndex(index)
+{
+	if (index != 0) {
+		dynamicKey = fmt::format(fmt::runtime(fmt::string_view(key.data(), key.size())), index);
+		this->key = dynamicKey;
+	}
+}
+
+string_view KeymapperOptions::Action::GetName() const
+{
+	if (dynamicIndex == 0)
+		return _(name);
+	dynamicName = fmt::format(fmt::runtime(_(name)), dynamicIndex);
+	return dynamicName;
+}
+
+void KeymapperOptions::Action::LoadFromIni(string_view category)
+{
+	std::array<char, 64> result;
+	if (!GetIniValue(category.data(), key.data(), result.data(), result.size())) {
+		SetValue(defaultKey);
+		return; // Use the default key if no key has been set.
+	}
+
+	std::string readKey = result.data();
+	if (readKey.empty()) {
+		SetValue(SDLK_UNKNOWN);
+		return;
+	}
+
+	auto keyIt = sgOptions.Keymapper.keyNameToKeyID.find(readKey);
+	if (keyIt == sgOptions.Keymapper.keyNameToKeyID.end()) {
+		// Use the default key if the key is unknown.
+		Log("Keymapper: unknown key '{}'", readKey);
+		SetValue(defaultKey);
+		return;
+	}
+
+	// Store the key in action.key and in the map so we can save() the
+	// actions while keeping the same order as they have been added.
+	SetValue(keyIt->second);
+}
+void KeymapperOptions::Action::SaveToIni(string_view category) const
+{
+	if (boundKey == SDLK_UNKNOWN) {
+		// Just add an empty config entry if the action is unbound.
+		SetIniValue(category.data(), key.data(), "");
+	}
+	auto keyNameIt = sgOptions.Keymapper.keyIDToKeyName.find(boundKey);
+	if (keyNameIt == sgOptions.Keymapper.keyIDToKeyName.end()) {
+		LogVerbose("Keymapper: no name found for key '{}'", key);
+		return;
+	}
+	SetIniValue(category.data(), key.data(), keyNameIt->second.c_str());
+}
+
+string_view KeymapperOptions::Action::GetValueDescription() const
+{
+	if (boundKey == SDLK_UNKNOWN)
+		return "";
+	auto keyNameIt = sgOptions.Keymapper.keyIDToKeyName.find(boundKey);
+	if (keyNameIt == sgOptions.Keymapper.keyIDToKeyName.end()) {
+		return "";
+	}
+	return keyNameIt->second;
+}
+
+bool KeymapperOptions::Action::SetValue(int value)
+{
+	if (value != SDLK_UNKNOWN && sgOptions.Keymapper.keyIDToKeyName.find(value) == sgOptions.Keymapper.keyIDToKeyName.end()) {
+		// Ignore invalid key values
+		return false;
+	}
+
+	// Remove old key
+	if (boundKey != SDLK_UNKNOWN) {
+		sgOptions.Keymapper.keyIDToAction.erase(boundKey);
+		boundKey = SDLK_UNKNOWN;
+	}
+
+	// Add new key
+	if (value != SDLK_UNKNOWN) {
+		auto it = sgOptions.Keymapper.keyIDToAction.find(value);
+		if (it != sgOptions.Keymapper.keyIDToAction.end()) {
+			// Warn about overwriting keys.
+			Log("Keymapper: key '{}' is already bound to action '{}', overwriting", value, it->second.get().name);
+			it->second.get().boundKey = SDLK_UNKNOWN;
+		}
+
+		sgOptions.Keymapper.keyIDToAction.insert_or_assign(value, *this);
+		boundKey = value;
+	}
+
+	return true;
+}
+
+void KeymapperOptions::AddAction(string_view key, const char *name, const char *description, uint32_t defaultKey, std::function<void()> actionPressed, std::function<void()> actionReleased, std::function<bool()> enable, unsigned index)
+{
+	actions.push_back(std::unique_ptr<Action>(new Action(key, name, description, defaultKey, std::move(actionPressed), std::move(actionReleased), std::move(enable), index)));
+}
+
+void KeymapperOptions::KeyPressed(uint32_t key) const
+{
+	if (key >= SDLK_a && key <= SDLK_z) {
+		key -= 'a' - 'A';
+	}
+
+	auto it = keyIDToAction.find(key);
+	if (it == keyIDToAction.end())
+		return; // Ignore unmapped keys.
+
+	const Action &action = it->second.get();
+
+	// Check that the action can be triggered and that the chat textbox is not
+	// open.
+	if (!action.actionPressed || (action.enable && !action.enable()) || talkflag)
+		return;
+
+	action.actionPressed();
+}
+
+void KeymapperOptions::KeyReleased(uint32_t key) const
+{
+	auto it = keyIDToAction.find(key);
+	if (it == keyIDToAction.end())
+		return; // Ignore unmapped keys.
+
+	const Action &action = it->second.get();
+
+	// Check that the action can be triggered and that the chat textbox is not
+	// open.
+	if (!action.actionReleased || (action.enable && !action.enable()) || talkflag)
+		return;
+
+	action.actionReleased();
+}
+
+string_view KeymapperOptions::KeyNameForAction(string_view actionName) const
+{
+	for (const auto &action : actions) {
+		if (action->key == actionName && action->boundKey != SDLK_UNKNOWN) {
+			return action->GetValueDescription();
+		}
+	}
+	return "";
+}
+
+uint32_t KeymapperOptions::KeyForAction(string_view actionName) const
+{
+	for (const auto &action : actions) {
+		if (action->key == actionName && action->boundKey != SDLK_UNKNOWN) {
+			return action->boundKey;
+		}
+	}
+	return SDLK_UNKNOWN;
+}
+
+namespace {
+constexpr char ResamplerSpeex[] = "Speex";
+constexpr char ResamplerSDL[] = "SDL";
+} // namespace
+
+string_view ResamplerToString(Resampler resampler)
+{
+	switch (resampler) {
+#ifdef DEVILUTIONX_RESAMPLER_SPEEX
+	case Resampler::Speex:
+		return ResamplerSpeex;
+#endif
+#ifdef DVL_AULIB_SUPPORTS_SDL_RESAMPLER
+	case Resampler::SDL:
+		return ResamplerSDL;
+#endif
+	default:
+		return "";
+	}
+}
+
+std::optional<Resampler> ResamplerFromString(string_view resampler)
+{
+#ifdef DEVILUTIONX_RESAMPLER_SPEEX
+	if (resampler == ResamplerSpeex)
+		return Resampler::Speex;
+#endif
+#ifdef DVL_AULIB_SUPPORTS_SDL_RESAMPLER
+	if (resampler == ResamplerSDL)
+		return Resampler::SDL;
+#endif
+	return std::nullopt;
 }
 
 } // namespace devilution

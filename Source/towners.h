@@ -5,9 +5,9 @@
  */
 #pragma once
 
+#include "utils/stdcompat/string_view.hpp"
 #include <cstdint>
 #include <memory>
-#include "utils/stdcompat/string_view.hpp"
 
 #include "items.h"
 #include "player.h"
@@ -36,14 +36,14 @@ enum _talker_id : uint8_t {
 };
 
 struct Towner {
-	byte *_tNAnim[8];
-	std::unique_ptr<byte[]> data;
-	byte *_tAnimData;
+	OptionalOwnedClxSpriteList ownedAnim;
+	OptionalClxSpriteList anim;
+
 	/** Used to get a voice line and text related to active quests when the player speaks to a town npc */
 	int16_t seed;
 	/** Tile position of NPC */
 	Point position;
-	int16_t _tAnimWidth;
+	uint16_t _tAnimWidth;
 	/** Tick length of each frame in the current animation */
 	int16_t _tAnimDelay;
 	/** Increases by one each game tick, counting how close we are to _pAnimDelay */
@@ -59,6 +59,11 @@ struct Towner {
 	std::size_t animOrderSize;
 	void (*talk)(Player &player, Towner &towner);
 	_talker_id _ttype;
+
+	ClxSprite currentSprite() const
+	{
+		return (*anim)[_tAnimFrame];
+	}
 };
 
 extern Towner Towners[NUM_TOWNERS];

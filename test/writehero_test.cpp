@@ -1,17 +1,17 @@
 #include "player_test.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <gtest/gtest.h>
 #include <vector>
-#include <cstdint>
+
+#include <gtest/gtest.h>
+#include <picosha2.h>
 
 #include "loadsave.h"
 #include "pack.h"
 #include "pfile.h"
 #include "utils/paths.h"
-
-#include "picosha2.h"
 
 using namespace devilution;
 
@@ -180,7 +180,7 @@ static void PackPlayerTest(PlayerPack *pPack)
 		pPack->InvList[i].idx = -1;
 	for (auto i = 0; i < 7; i++)
 		pPack->InvBody[i].idx = -1;
-	for (auto i = 0; i < MAXBELTITEMS; i++)
+	for (auto i = 0; i < MaxBeltItems; i++)
 		PackItemFullRejuv(pPack->SpdList + i, i);
 	for (auto i = 1; i < 37; i++) {
 		if (spelldat_vanilla[i] != -1) {
@@ -217,11 +217,11 @@ static void PackPlayerTest(PlayerPack *pPack)
 static void AssertPlayer(Player &player)
 {
 	ASSERT_EQ(Count8(player._pSplLvl, 64), 23);
-	ASSERT_EQ(Count8(player.InvGrid, NUM_INV_GRID_ELEM), 9);
+	ASSERT_EQ(Count8(player.InvGrid, InventoryGridCells), 9);
 	ASSERT_EQ(CountItems(player.InvBody, NUM_INVLOC), 6);
-	ASSERT_EQ(CountItems(player.InvList, NUM_INV_GRID_ELEM), 2);
-	ASSERT_EQ(CountItems(player.SpdList, MAXBELTITEMS), 8);
-	ASSERT_EQ(CountItems(&player.HoldItem, 1), 1);
+	ASSERT_EQ(CountItems(player.InvList, InventoryGridCells), 2);
+	ASSERT_EQ(CountItems(player.SpdList, MaxBeltItems), 8);
+	ASSERT_EQ(CountItems(&player.HoldItem, 1), 0);
 
 	ASSERT_EQ(player.position.tile.x, 75);
 	ASSERT_EQ(player.position.tile.y, 68);
@@ -259,25 +259,25 @@ static void AssertPlayer(Player &player)
 	ASSERT_EQ(player.pBattleNet, 0);
 	ASSERT_EQ(player.pManaShield, 0);
 	ASSERT_EQ(player.pDifficulty, 0);
-	ASSERT_EQ(player.pDamAcFlags, 0);
+	ASSERT_EQ(player.pDamAcFlags, ItemSpecialEffectHf::None);
 
 	ASSERT_EQ(player._pmode, 0);
-	ASSERT_EQ(Count8(player.walkpath, MAX_PATH_LENGTH), 25);
+	ASSERT_EQ(Count8(player.walkpath, MaxPathLength), 25);
 	ASSERT_EQ(player._pgfxnum, 36);
-	ASSERT_EQ(player.AnimInfo.TicksPerFrame, 4);
-	ASSERT_EQ(player.AnimInfo.TickCounterOfCurrentFrame, 1);
-	ASSERT_EQ(player.AnimInfo.NumberOfFrames, 20);
-	ASSERT_EQ(player.AnimInfo.CurrentFrame, 1);
-	ASSERT_EQ(player._pSpell, -1);
-	ASSERT_EQ(player._pSplType, 4);
-	ASSERT_EQ(player._pSplFrom, 0);
+	ASSERT_EQ(player.AnimInfo.ticksPerFrame, 4);
+	ASSERT_EQ(player.AnimInfo.tickCounterOfCurrentFrame, 1);
+	ASSERT_EQ(player.AnimInfo.numberOfFrames, 20);
+	ASSERT_EQ(player.AnimInfo.currentFrame, 0);
+	ASSERT_EQ(player.queuedSpell.spellId, -1);
+	ASSERT_EQ(player.queuedSpell.spellType, 4);
+	ASSERT_EQ(player.queuedSpell.spellFrom, 0);
 	ASSERT_EQ(player._pTSpell, 0);
 	ASSERT_EQ(player._pRSpell, -1);
 	ASSERT_EQ(player._pRSplType, 4);
 	ASSERT_EQ(player._pSBkSpell, -1);
 	ASSERT_EQ(player._pAblSpells, 134217728);
 	ASSERT_EQ(player._pScrlSpells, 0);
-	ASSERT_EQ(player._pSpellFlags, 0);
+	ASSERT_EQ(player._pSpellFlags, SpellFlag::None);
 	ASSERT_TRUE(player.UsesRangedWeapon());
 	ASSERT_EQ(player._pBlockFlag, 0);
 	ASSERT_EQ(player._pLightRad, 11);
@@ -309,7 +309,7 @@ static void AssertPlayer(Player &player)
 	ASSERT_EQ(player._pIBonusAC, 0);
 	ASSERT_EQ(player._pIBonusDamMod, 0);
 	ASSERT_EQ(player._pISpells, 0);
-	ASSERT_EQ(player._pIFlags, 0);
+	ASSERT_EQ(player._pIFlags, ItemSpecialEffect::None);
 	ASSERT_EQ(player._pIGetHit, 0);
 	ASSERT_EQ(player._pISplLvlAdd, 0);
 	ASSERT_EQ(player._pISplDur, 0);
@@ -333,6 +333,7 @@ TEST(Writehero, pfile_write_hero)
 	leveltype = DTYPE_TOWN;
 	giNumberOfLevels = 17;
 
+	Players.resize(1);
 	MyPlayerId = 0;
 	MyPlayer = &Players[MyPlayerId];
 	*MyPlayer = {};
@@ -343,7 +344,7 @@ TEST(Writehero, pfile_write_hero)
 	pfile_ui_save_create(&info);
 	PlayerPack pks;
 	PackPlayerTest(&pks);
-	UnPackPlayer(&pks, Players[MyPlayerId], true);
+	UnPackPlayer(&pks, *MyPlayer, true);
 	AssertPlayer(Players[0]);
 	pfile_write_hero();
 

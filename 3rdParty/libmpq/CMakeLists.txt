@@ -1,15 +1,17 @@
-find_package(ZLIB REQUIRED)
+if(NOT TARGET ZLIB::ZLIB)
+  find_package(ZLIB REQUIRED)
+endif()
 
 if(NOT TARGET BZip2::BZip2)
   find_package(BZip2 REQUIRED)
 endif()
 
-include(FetchContent_MakeAvailableExcludeFromAll)
+include(functions/FetchContent_MakeAvailableExcludeFromAll)
 
 include(FetchContent)
 FetchContent_Declare(libmpq
-    URL https://github.com/diasurgical/libmpq/archive/5f9187193b4c6ed01c8fb694d149b12429cb8b1b.tar.gz
-    URL_HASH MD5=689b123c3a3cb0b4a19e899fd86ac1bf
+    URL https://github.com/diasurgical/libmpq/archive/6a9fbdc7ed3032ff00eb069590da4629bd95da5f.tar.gz
+    URL_HASH MD5=5aa2add93b15c1823c18e95768195876
 )
 FetchContent_MakeAvailableExcludeFromAll(libmpq)
 

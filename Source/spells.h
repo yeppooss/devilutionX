@@ -16,9 +16,12 @@ enum class SpellCheckResult : uint8_t {
 	Fail_Busy,
 };
 
-int GetManaAmount(Player &player, spell_id sn);
-void UseMana(int id, spell_id sn);
-SpellCheckResult CheckSpell(int id, spell_id sn, spell_type st, bool manaonly);
+bool IsValidSpell(spell_id spl);
+bool IsWallSpell(spell_id spl);
+bool TargetsMonster(spell_id id);
+int GetManaAmount(const Player &player, spell_id sn);
+void ConsumeSpell(Player &player, spell_id sn);
+SpellCheckResult CheckSpell(const Player &player, spell_id sn, spell_type st, bool manaonly);
 
 /**
  * @brief Ensures the player's current readied spell is a valid selection for the character. If the current selection is
@@ -28,14 +31,14 @@ SpellCheckResult CheckSpell(int id, spell_id sn, spell_type st, bool manaonly);
  * @param player The player whose readied spell is to be checked.
  */
 void EnsureValidReadiedSpell(Player &player);
-void CastSpell(int id, int spl, int sx, int sy, int dx, int dy, int spllvl);
+void CastSpell(int id, spell_id spl, int sx, int sy, int dx, int dy, int spllvl);
 
 /**
  * @param pnum player index
  * @param rid target player index
  */
-void DoResurrect(int pnum, uint16_t rid);
-void DoHealOther(int pnum, uint16_t rid);
+void DoResurrect(size_t pnum, Player &target);
+void DoHealOther(const Player &caster, Player &target);
 int GetSpellBookLevel(spell_id s);
 int GetSpellStaffLevel(spell_id s);
 
